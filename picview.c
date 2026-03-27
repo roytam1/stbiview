@@ -1,3 +1,6 @@
+#define STB_IMAGE_IMPLEMENTATION
+#define STBI_NO_SIMD
+#include "stb_image.h"
 #include <windows.h>
 #include <commdlg.h>
 
@@ -5,7 +8,7 @@ LRESULT CALLBACK WindowProc(HWND, UINT, WPARAM, LPARAM);
 void OpenPicFile(HWND hwnd);
 
 HBITMAP hBitmap = NULL;
-int bmpWidth = 0, bmpHeight = 0;
+int imgWidth = 0, imgHeight = 0;
 int scrollX = 0, scrollY = 0;
 
 int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrev, LPSTR lpCmdLine, int nCmdShow) {
@@ -16,16 +19,15 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrev, LPSTR lpCmdLine, int nC
     wc.hInstance     = hInstance;
     wc.hCursor       = LoadCursor(NULL, IDC_ARROW);
     wc.hbrBackground = (HBRUSH)(COLOR_WINDOW + 1);
-    wc.lpszClassName = "NT4_BMP_Viewer";
+    wc.lpszClassName = "NT4_STB_Viewer";
 
     RegisterClass(&wc);
 
-    hwnd = CreateWindow("NT4_BMP_Viewer", "NT4 BMP Viewer - Press 'O' to Open",
+    hwnd = CreateWindow("NT4_STB_Viewer", "NT4 Image Viewer (stb_image) - Press 'O'",
         WS_OVERLAPPEDWINDOW | WS_HSCROLL | WS_VSCROLL,
         CW_USEDEFAULT, CW_USEDEFAULT, 800, 600, NULL, NULL, hInstance, NULL);
 
     ShowWindow(hwnd, nCmdShow);
-    UpdateWindow(hwnd);
 
     while (GetMessage(&msg, NULL, 0, 0)) {
         TranslateMessage(&msg);
@@ -43,25 +45,53 @@ void OpenPicFile(HWND hwnd) {
     ofn.hwndOwner = hwnd;
     ofn.lpstrFile = szFile;
     ofn.nMaxFile = sizeof(szFile);
-    ofn.lpstrFilter = "Bitmaps (*.bmp)\0*.bmp\0All Files (*.*)\0*.*\0";
-    ofn.nFilterIndex = 1;
+    ofn.lpstrFilter = "Images\0*.jpg;*.png;*.bmp;*.tga\0All Files\0*.*\0";
     ofn.Flags = OFN_PATHMUSTEXIST | OFN_FILEMUSTEXIST;
 
     if (GetOpenFileName(&ofn)) {
-        if (hBitmap) DeleteObject(hBitmap);
+        int channels;
+        // stb_image loads pixels as RGBA/RGB
+        unsigned char *data = stbi_load(szFile, &imgWidth, &imgHeight, &channels, 4);
         
-        hBitmap = (HBITMAP)LoadImage(NULL, szFile, IMAGE_BITMAP, 0, 0, LR_LOADFROMFILE);
-        if (hBitmap) {
-            RECT rect;
-            BITMAP bmp;
-            GetObject(hBitmap, sizeof(BITMAP), &bmp);
-            bmpWidth = bmp.bmWidth;
-            bmpHeight = bmp.bmHeight;
+        if (data) {
+            BITMAPINFO bmi = {0};
+            void *pBits;
+            HDC hdc;
+            RECT r;
+
+            if (hBitmap) DeleteObject(hBitmap);
+
+            // Create a DIB Section so GDI can use the raw pixel data
+            bmi.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
+            bmi.bmiHeader.biWidth = imgWidth;
+            bmi.bmiHeader.biHeight = -imgHeight; // Negative for top-down
+            bmi.bmiHeader.biPlanes = 1;
+            bmi.bmiHeader.biBitCount = 32;
+            bmi.bmiHeader.biCompression = BI_RGB;
+
+            hdc = GetDC(hwnd);
+            hBitmap = CreateDIBSection(hdc, &bmi, DIB_RGB_COLORS, &pBits, NULL, 0);
+            ReleaseDC(hwnd, hdc);
+
+            if (hBitmap) {
+                // stb_image gives RGBA, but Windows DIB is BGRA. 
+                // We need to swizzle the bytes or just copy if alpha isn't a concern.
+                // For a simple viewer, we'll manually swap R and B:
+                int i;
+                unsigned char *pDest = (unsigned char*)pBits;
+                for (i = 0; i < imgWidth * imgHeight * 4; i += 4) {
+                    pDest[i]     = data[i+2]; // Blue
+                    pDest[i+1]   = data[i+1]; // Green
+                    pDest[i+2]   = data[i];   // Red
+                    pDest[i+3]   = data[i+3]; // Alpha
+                }
+            }
+            stbi_image_free(data);
+
+            // Reset view
             scrollX = 0; scrollY = 0;
-            
-            // Refresh scrollbars and window
-            GetClientRect(hwnd, &rect);
-            SendMessage(hwnd, WM_SIZE, 0, MAKELPARAM(rect.right, rect.bottom));
+            GetClientRect(hwnd, &r);
+            SendMessage(hwnd, WM_SIZE, 0, MAKELPARAM(r.right, r.bottom));
             InvalidateRect(hwnd, NULL, TRUE);
         }
     }
@@ -74,14 +104,10 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam) 
             return 0;
 
         case WM_SIZE: {
-            int cx = LOWORD(lParam);
-            int cy = HIWORD(lParam);
             SCROLLINFO si = { sizeof(SCROLLINFO), SIF_RANGE | SIF_PAGE | SIF_POS };
-            
-            si.nMax = bmpWidth; si.nPage = cx; si.nPos = scrollX;
+            si.nMax = imgWidth; si.nPage = LOWORD(lParam); si.nPos = scrollX;
             SetScrollInfo(hwnd, SB_HORZ, &si, TRUE);
-            
-            si.nMax = bmpHeight; si.nPage = cy; si.nPos = scrollY;
+            si.nMax = imgHeight; si.nPage = HIWORD(lParam); si.nPos = scrollY;
             SetScrollInfo(hwnd, SB_VERT, &si, TRUE);
             return 0;
         }
@@ -90,10 +116,8 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam) 
         case WM_VSCROLL: {
             int bar = (uMsg == WM_HSCROLL) ? SB_HORZ : SB_VERT;
             int* pos = (uMsg == WM_HSCROLL) ? &scrollX : &scrollY;
-            
             SCROLLINFO si = { sizeof(SCROLLINFO), SIF_ALL };
             GetScrollInfo(hwnd, bar, &si);
-
             switch (LOWORD(wParam)) {
                 case SB_TOP:           si.nPos = si.nMin; break;
                 case SB_BOTTOM:        si.nPos = si.nMax; break;
@@ -103,12 +127,10 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam) 
                 case SB_PAGEDOWN:      si.nPos += si.nPage; break;
                 case SB_THUMBTRACK:    si.nPos = si.nTrackPos; break;
             }
-
             si.fMask = SIF_POS;
             SetScrollInfo(hwnd, bar, &si, TRUE);
-            GetScrollInfo(hwnd, bar, &si); // Get clamped position
+            GetScrollInfo(hwnd, bar, &si);
             *pos = si.nPos;
-
             InvalidateRect(hwnd, NULL, TRUE);
             return 0;
         }

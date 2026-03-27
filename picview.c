@@ -24,7 +24,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrev, LPSTR lpCmdLine, int nC
 
     RegisterClass(&wc);
 
-    hwnd = CreateWindow("NT4_STB_Viewer", "NT4 Image Viewer (stb_image) - Press 'O'",
+    hwnd = CreateWindowEx(WS_EX_ACCEPTFILES, "NT4_STB_Viewer", "NT4 Image Viewer (stb_image) - Press 'O' to open file",
         WS_OVERLAPPEDWINDOW | WS_HSCROLL | WS_VSCROLL,
         CW_USEDEFAULT, CW_USEDEFAULT, 800, 600, NULL, NULL, hInstance, NULL);
 
@@ -64,6 +64,69 @@ void UpdateScrollbars(HWND hwnd) {
     scrollY = GetScrollPos(hwnd, SB_VERT);
 }
 
+void LoadImageFromPath(HWND hwnd, char* filePath) {
+    int channels;
+    // stb_image loads pixels as RGBA/RGB
+    unsigned char *data = stbi_load(filePath, &imgWidth, &imgHeight, &channels, 4);
+
+    if (data) {
+        BITMAPINFO bmi = {0};
+        void *pBits;
+        HDC hdc;
+        RECT r;
+        int i;
+        unsigned char *pDest;
+
+        if (hBitmap) DeleteObject(hBitmap);
+        if (hPalette) DeleteObject(hPalette);
+
+        // 1. Create a Halftone Palette for 8-bit displays
+        hdc = GetDC(hwnd);
+        hPalette = CreateHalftonePalette(hdc);
+
+        // 2. Prepare Bitmap Info
+        bmi.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
+        bmi.bmiHeader.biWidth = imgWidth;
+        bmi.bmiHeader.biHeight = -imgHeight;
+        bmi.bmiHeader.biPlanes = 1;
+        bmi.bmiHeader.biBitCount = 32;
+        bmi.bmiHeader.biCompression = BI_RGB;
+
+        // Swizzle RGBA -> BGRA
+        for (i = 0; i < imgWidth * imgHeight * 4; i += 4) {
+            unsigned char r = data[i];
+            data[i] = data[i + 2];
+            data[i + 2] = r;
+        }
+
+        // --- METHOD 1: CreateDIBSection (Modern/Efficient) ---
+        hBitmap = CreateDIBSection(hdc, &bmi, DIB_RGB_COLORS, &pBits, NULL, 0);
+
+        if (hBitmap && pBits) {
+            // Success: Copy swizzled data to the DIB pointer
+            memcpy(pBits, data, imgWidth * imgHeight * 4);
+        }
+        else {
+            // --- METHOD 2: Fallback (DDB + SetDIBits) ---
+            // Create a bitmap compatible with the current display
+            hBitmap = CreateCompatibleBitmap(hdc, imgWidth, imgHeight);
+            if (hBitmap) {
+                // Manually push the pixel data into the bitmap handle
+                SetDIBits(hdc, hBitmap, 0, imgHeight, data, &bmi, DIB_RGB_COLORS);
+            }
+        }
+
+        ReleaseDC(hwnd, hdc);
+        stbi_image_free(data);
+
+        // Reset view
+        scrollX = 0; scrollY = 0;
+        GetClientRect(hwnd, &r);
+        SendMessage(hwnd, WM_SIZE, 0, MAKELPARAM(r.right, r.bottom));
+        InvalidateRect(hwnd, NULL, TRUE);
+    }
+}
+
 void OpenPicFile(HWND hwnd) {
     OPENFILENAME ofn;
     char szFile[260] = {0};
@@ -77,66 +140,7 @@ void OpenPicFile(HWND hwnd) {
     ofn.Flags = OFN_PATHMUSTEXIST | OFN_FILEMUSTEXIST;
 
     if (GetOpenFileName(&ofn)) {
-        int channels;
-        // stb_image loads pixels as RGBA/RGB
-        unsigned char *data = stbi_load(szFile, &imgWidth, &imgHeight, &channels, 4);
-        
-        if (data) {
-            BITMAPINFO bmi = {0};
-            void *pBits;
-            HDC hdc;
-            RECT r;
-            int i;
-            unsigned char *pDest;
-
-            if (hBitmap) DeleteObject(hBitmap);
-            if (hPalette) DeleteObject(hPalette);
-
-            // 1. Create a Halftone Palette for 8-bit displays
-            hdc = GetDC(hwnd);
-            hPalette = CreateHalftonePalette(hdc);
-        
-            // 2. Prepare Bitmap Info
-            bmi.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
-            bmi.bmiHeader.biWidth = imgWidth;
-            bmi.bmiHeader.biHeight = -imgHeight;
-            bmi.bmiHeader.biPlanes = 1;
-            bmi.bmiHeader.biBitCount = 32;
-            bmi.bmiHeader.biCompression = BI_RGB;
-
-            // Swizzle RGBA -> BGRA
-            for (i = 0; i < imgWidth * imgHeight * 4; i += 4) {
-                unsigned char r = data[i];
-                data[i] = data[i + 2];
-                data[i + 2] = r;
-            }
-
-            // --- METHOD 1: CreateDIBSection (Modern/Efficient) ---
-            hBitmap = CreateDIBSection(hdc, &bmi, DIB_RGB_COLORS, &pBits, NULL, 0);
-
-            if (hBitmap && pBits) {
-                // Success: Copy swizzled data to the DIB pointer
-                memcpy(pBits, data, imgWidth * imgHeight * 4);
-            }
-            else {
-                // --- METHOD 2: Fallback (DDB + SetDIBits) ---
-                // Create a bitmap compatible with the current display
-                hBitmap = CreateCompatibleBitmap(hdc, imgWidth, imgHeight);
-                if (hBitmap) {
-                    // Manually push the pixel data into the bitmap handle
-                    SetDIBits(hdc, hBitmap, 0, imgHeight, data, &bmi, DIB_RGB_COLORS);
-                }
-            }
-
-            ReleaseDC(hwnd, hdc);
-            stbi_image_free(data);
-
-            // Reset view
-            scrollX = 0; scrollY = 0;
-            GetClientRect(hwnd, &r);
-            SendMessage(hwnd, WM_SIZE, 0, MAKELPARAM(r.right, r.bottom));
-            InvalidateRect(hwnd, NULL, TRUE);
-        }
+        LoadImageFromPath(hwnd, szFile);
     }
 }
 
@@ -193,6 +197,20 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam) 
         case WM_SIZE:
             UpdateScrollbars(hwnd);
             return 0;
+
+        case WM_DROPFILES: {
+            HDROP hDrop = (HDROP)wParam;
+            char szFile[MAX_PATH];
+
+            // Get the count of dropped files (we only care about the first one)
+            if (DragQueryFile(hDrop, 0, szFile, MAX_PATH)) {
+                LoadImageFromPath(hwnd, szFile);
+            }
+
+            // Must release the handle allocated by the shell
+            DragFinish(hDrop);
+            return 0;
+        }
 
         case WM_KEYDOWN:
             switch (wParam) {

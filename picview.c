@@ -190,12 +190,48 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam) 
             return 0;
         }
 
-        case WM_KEYDOWN:
-            if (wParam == 'O') OpenPicFile(hwnd);
-            return 0;
-
         case WM_SIZE:
             UpdateScrollbars(hwnd);
+            return 0;
+
+        case WM_KEYDOWN:
+            switch (wParam) {
+                // Vertical Navigation
+                case VK_UP:
+                    SendMessage(hwnd, WM_VSCROLL, SB_LINEUP, 0);
+                    break;
+                case VK_DOWN:
+                    SendMessage(hwnd, WM_VSCROLL, SB_LINEDOWN, 0);
+                    break;
+                case VK_PRIOR: // Page Up
+                    SendMessage(hwnd, WM_VSCROLL, SB_PAGEUP, 0);
+                    break;
+                case VK_NEXT:  // Page Down
+                    SendMessage(hwnd, WM_VSCROLL, SB_PAGEDOWN, 0);
+                    break;
+                case VK_HOME:
+                    SendMessage(hwnd, WM_VSCROLL, SB_TOP, 0);
+                    break;
+                case VK_END:
+                    SendMessage(hwnd, WM_VSCROLL, SB_BOTTOM, 0);
+                    break;
+
+                // Horizontal Navigation
+                case VK_LEFT:
+                    SendMessage(hwnd, WM_HSCROLL, SB_LINEUP, 0); // SB_LINEUP is used for Left
+                    break;
+                case VK_RIGHT:
+                    SendMessage(hwnd, WM_HSCROLL, SB_LINEDOWN, 0); // SB_LINEDOWN is used for Right
+                    break;
+
+                // File Operations
+                case 'O':
+                    OpenPicFile(hwnd);
+                    break;
+                case VK_ESCAPE:
+                    PostQuitMessage(0);
+                    break;
+            }
             return 0;
 
         case WM_HSCROLL:
@@ -207,23 +243,26 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam) 
 
             oldPos = si.nPos;
             switch (LOWORD(wParam)) {
-                case SB_TOP:           si.nPos = si.nMin; break;
-                case SB_BOTTOM:        si.nPos = si.nMax; break;
-                case SB_LINEUP:        si.nPos -= 20; break;
-                case SB_LINEDOWN:      si.nPos += 20; break;
-                case SB_PAGEUP:        si.nPos -= si.nPage; break;
-                case SB_PAGEDOWN:      si.nPos += si.nPage; break;
-                case SB_THUMBTRACK:    si.nPos = si.nTrackPos; break;
+                case SB_TOP:        si.nPos = si.nMin; break;
+                case SB_BOTTOM:     si.nPos = si.nMax; break;
+                case SB_LINEUP:     si.nPos -= 20; break;
+                case SB_LINEDOWN:   si.nPos += 20; break;
+                case SB_PAGEUP:     si.nPos -= si.nPage; break;
+                case SB_PAGEDOWN:   si.nPos += si.nPage; break;
+                case SB_THUMBTRACK: si.nPos = si.nTrackPos; break;
             }
 
             si.fMask = SIF_POS;
             SetScrollInfo(hwnd, bar, &si, TRUE);
-            GetScrollInfo(hwnd, bar, &si); // Get clamped pos
+            GetScrollInfo(hwnd, bar, &si); // Get clamped position
 
             if (uMsg == WM_HSCROLL) scrollX = si.nPos;
             else scrollY = si.nPos;
 
-            if (oldPos != si.nPos) InvalidateRect(hwnd, NULL, TRUE);
+            // Only redraw if the position actually changed
+            if (oldPos != si.nPos) {
+                InvalidateRect(hwnd, NULL, TRUE);
+            }
             return 0;
         }
 

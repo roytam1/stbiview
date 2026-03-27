@@ -2,13 +2,15 @@
 #include <commdlg.h>
 
 LRESULT CALLBACK WindowProc(HWND, UINT, WPARAM, LPARAM);
-void OpenFile(HWND hwnd);
+void OpenPicFile(HWND hwnd);
 
 HBITMAP hBitmap = NULL;
 int bmpWidth = 0, bmpHeight = 0;
 int scrollX = 0, scrollY = 0;
 
 int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrev, LPSTR lpCmdLine, int nCmdShow) {
+    HWND hwnd;
+    MSG msg;
     WNDCLASS wc = {0};
     wc.lpfnWndProc   = WindowProc;
     wc.hInstance     = hInstance;
@@ -18,14 +20,13 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrev, LPSTR lpCmdLine, int nC
 
     RegisterClass(&wc);
 
-    HWND hwnd = CreateWindow("NT4_BMP_Viewer", "NT4 BMP Viewer - Press 'O' to Open",
+    hwnd = CreateWindow("NT4_BMP_Viewer", "NT4 BMP Viewer - Press 'O' to Open",
         WS_OVERLAPPEDWINDOW | WS_HSCROLL | WS_VSCROLL,
         CW_USEDEFAULT, CW_USEDEFAULT, 800, 600, NULL, NULL, hInstance, NULL);
 
     ShowWindow(hwnd, nCmdShow);
     UpdateWindow(hwnd);
 
-    MSG msg;
     while (GetMessage(&msg, NULL, 0, 0)) {
         TranslateMessage(&msg);
         DispatchMessage(&msg);
@@ -33,7 +34,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrev, LPSTR lpCmdLine, int nC
     return msg.wParam;
 }
 
-void OpenFile(HWND hwnd) {
+void OpenPicFile(HWND hwnd) {
     OPENFILENAME ofn;
     char szFile[260] = {0};
 
@@ -51,6 +52,7 @@ void OpenFile(HWND hwnd) {
         
         hBitmap = (HBITMAP)LoadImage(NULL, szFile, IMAGE_BITMAP, 0, 0, LR_LOADFROMFILE);
         if (hBitmap) {
+            RECT rect;
             BITMAP bmp;
             GetObject(hBitmap, sizeof(BITMAP), &bmp);
             bmpWidth = bmp.bmWidth;
@@ -58,7 +60,6 @@ void OpenFile(HWND hwnd) {
             scrollX = 0; scrollY = 0;
             
             // Refresh scrollbars and window
-            RECT rect;
             GetClientRect(hwnd, &rect);
             SendMessage(hwnd, WM_SIZE, 0, MAKELPARAM(rect.right, rect.bottom));
             InvalidateRect(hwnd, NULL, TRUE);
@@ -69,7 +70,7 @@ void OpenFile(HWND hwnd) {
 LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam) {
     switch (uMsg) {
         case WM_KEYDOWN:
-            if (wParam == 'O') OpenFile(hwnd);
+            if (wParam == 'O') OpenPicFile(hwnd);
             return 0;
 
         case WM_SIZE: {

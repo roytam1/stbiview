@@ -58,6 +58,8 @@ void OpenPicFile(HWND hwnd) {
             void *pBits;
             HDC hdc;
             RECT r;
+            int i;
+            unsigned char *pDest;
 
             if (hBitmap) DeleteObject(hBitmap);
 
@@ -70,22 +72,31 @@ void OpenPicFile(HWND hwnd) {
             bmi.bmiHeader.biCompression = BI_RGB;
 
             hdc = GetDC(hwnd);
-            hBitmap = CreateDIBSection(hdc, &bmi, DIB_RGB_COLORS, &pBits, NULL, 0);
-            ReleaseDC(hwnd, hdc);
 
-            if (hBitmap) {
-                // stb_image gives RGBA, but Windows DIB is BGRA. 
-                // We need to swizzle the bytes or just copy if alpha isn't a concern.
-                // For a simple viewer, we'll manually swap R and B:
-                int i;
-                unsigned char *pDest = (unsigned char*)pBits;
-                for (i = 0; i < imgWidth * imgHeight * 4; i += 4) {
-                    pDest[i]     = data[i+2]; // Blue
-                    pDest[i+1]   = data[i+1]; // Green
-                    pDest[i+2]   = data[i];   // Red
-                    pDest[i+3]   = data[i+3]; // Alpha
+            // Perform Byte Swizzle (RGBA -> BGRA)
+            for (i = 0; i < imgWidth * imgHeight * 4; i += 4) {
+                unsigned char r = data[i];
+                data[i] = data[i + 2]; // Blue
+                data[i + 2] = r;       // Red
+            }
+            // --- METHOD 1: CreateDIBSection (Modern/Efficient) ---
+            hBitmap = CreateDIBSection(hdc, &bmi, DIB_RGB_COLORS, &pBits, NULL, 0);
+
+            if (hBitmap && pBits) {
+                // Success: Copy swizzled data to the DIB pointer
+                memcpy(pBits, data, imgWidth * imgHeight * 4);
+            }
+            else {
+                // --- METHOD 2: Fallback (DDB + SetDIBits) ---
+                // Create a bitmap compatible with the current display
+                hBitmap = CreateCompatibleBitmap(hdc, imgWidth, imgHeight);
+                if (hBitmap) {
+                    // Manually push the pixel data into the bitmap handle
+                    SetDIBits(hdc, hBitmap, 0, imgHeight, data, &bmi, DIB_RGB_COLORS);
                 }
             }
+
+            ReleaseDC(hwnd, hdc);
             stbi_image_free(data);
 
             // Reset view

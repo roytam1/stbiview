@@ -8,6 +8,7 @@ LRESULT CALLBACK WindowProc(HWND, UINT, WPARAM, LPARAM);
 void OpenPicFile(HWND hwnd);
 
 HBITMAP hBitmap = NULL;
+HPALETTE hPalette = NULL; // New: Palette handle
 int imgWidth = 0, imgHeight = 0;
 int scrollX = 0, scrollY = 0;
 
@@ -89,23 +90,27 @@ void OpenPicFile(HWND hwnd) {
             unsigned char *pDest;
 
             if (hBitmap) DeleteObject(hBitmap);
+            if (hPalette) DeleteObject(hPalette);
 
-            // Create a DIB Section so GDI can use the raw pixel data
+            // 1. Create a Halftone Palette for 8-bit displays
+            hdc = GetDC(hwnd);
+            hPalette = CreateHalftonePalette(hdc);
+        
+            // 2. Prepare Bitmap Info
             bmi.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
             bmi.bmiHeader.biWidth = imgWidth;
-            bmi.bmiHeader.biHeight = -imgHeight; // Negative for top-down
+            bmi.bmiHeader.biHeight = -imgHeight;
             bmi.bmiHeader.biPlanes = 1;
             bmi.bmiHeader.biBitCount = 32;
             bmi.bmiHeader.biCompression = BI_RGB;
 
-            hdc = GetDC(hwnd);
-
-            // Perform Byte Swizzle (RGBA -> BGRA)
+            // Swizzle RGBA -> BGRA
             for (i = 0; i < imgWidth * imgHeight * 4; i += 4) {
                 unsigned char r = data[i];
-                data[i] = data[i + 2]; // Blue
-                data[i + 2] = r;       // Red
+                data[i] = data[i + 2];
+                data[i + 2] = r;
             }
+
             // --- METHOD 1: CreateDIBSection (Modern/Efficient) ---
             hBitmap = CreateDIBSection(hdc, &bmi, DIB_RGB_COLORS, &pBits, NULL, 0);
 
@@ -137,6 +142,54 @@ void OpenPicFile(HWND hwnd) {
 
 LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam) {
     switch (uMsg) {
+        case WM_QUERYNEWPALETTE:
+            if (hPalette) {
+                UINT updated;
+                HDC hdc = GetDC(hwnd);
+                SelectPalette(hdc, hPalette, FALSE);
+                updated = RealizePalette(hdc);
+                ReleaseDC(hwnd, hdc);
+                if (updated > 0) InvalidateRect(hwnd, NULL, TRUE);
+                return TRUE;
+            }
+            return FALSE;
+
+        case WM_PALETTECHANGED:
+            if (hPalette && (HWND)wParam != hwnd) {
+                HDC hdc = GetDC(hwnd);
+                SelectPalette(hdc, hPalette, FALSE);
+                RealizePalette(hdc);
+                ReleaseDC(hwnd, hdc);
+                UpdateWindow(hwnd);
+            }
+            return 0;
+
+        case WM_PAINT: {
+            PAINTSTRUCT ps;
+            HDC hdc = BeginPaint(hwnd, &ps);
+            if (hBitmap) {
+                HDC hdcMem;
+                // IMPORTANT: Select and Realize Palette in the Paint DC
+                if (hPalette) {
+                    SelectPalette(hdc, hPalette, FALSE);
+                    RealizePalette(hdc);
+                }
+
+                hdcMem = CreateCompatibleDC(hdc);
+                SelectObject(hdcMem, hBitmap);
+                
+                // Use SetStretchBltMode for better quality in 8-bit
+                SetStretchBltMode(hdc, COLORONCOLOR);
+
+                BitBlt(hdc, 0, 0, ps.rcPaint.right, ps.rcPaint.bottom, 
+                       hdcMem, scrollX, scrollY, SRCCOPY);
+                
+                DeleteDC(hdcMem);
+            }
+            EndPaint(hwnd, &ps);
+            return 0;
+        }
+
         case WM_KEYDOWN:
             if (wParam == 'O') OpenPicFile(hwnd);
             return 0;
@@ -171,20 +224,6 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam) 
             else scrollY = si.nPos;
 
             if (oldPos != si.nPos) InvalidateRect(hwnd, NULL, TRUE);
-            return 0;
-        }
-
-        case WM_PAINT: {
-            PAINTSTRUCT ps;
-            HDC hdc = BeginPaint(hwnd, &ps);
-            if (hBitmap) {
-                HDC hdcMem = CreateCompatibleDC(hdc);
-                SelectObject(hdcMem, hBitmap);
-                BitBlt(hdc, 0, 0, ps.rcPaint.right, ps.rcPaint.bottom, 
-                       hdcMem, scrollX + ps.rcPaint.left, scrollY + ps.rcPaint.top, SRCCOPY);
-                DeleteDC(hdcMem);
-            }
-            EndPaint(hwnd, &ps);
             return 0;
         }
 

@@ -36,6 +36,33 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrev, LPSTR lpCmdLine, int nC
     return msg.wParam;
 }
 
+// Recalculates scrollbar ranges based on current window size
+void UpdateScrollbars(HWND hwnd) {
+    int cw, ch;
+    RECT clientRect;
+    SCROLLINFO si = { sizeof(SCROLLINFO), SIF_RANGE | SIF_PAGE | SIF_DISABLENOSCROLL };
+
+    GetClientRect(hwnd, &clientRect);
+    cw = clientRect.right;
+    ch = clientRect.bottom;
+
+    // Horizontal
+    si.nMin = 0;
+    si.nMax = imgWidth;
+    si.nPage = cw;
+    SetScrollInfo(hwnd, SB_HORZ, &si, TRUE);
+
+    // Vertical
+    si.nMin = 0;
+    si.nMax = imgHeight;
+    si.nPage = ch;
+    SetScrollInfo(hwnd, SB_VERT, &si, TRUE);
+
+    // Ensure scroll position doesn't hang out in "dead space" after shrink
+    scrollX = GetScrollPos(hwnd, SB_HORZ);
+    scrollY = GetScrollPos(hwnd, SB_VERT);
+}
+
 void OpenPicFile(HWND hwnd) {
     OPENFILENAME ofn;
     char szFile[260] = {0};
@@ -114,21 +141,18 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam) 
             if (wParam == 'O') OpenPicFile(hwnd);
             return 0;
 
-        case WM_SIZE: {
-            SCROLLINFO si = { sizeof(SCROLLINFO), SIF_RANGE | SIF_PAGE | SIF_POS };
-            si.nMax = imgWidth; si.nPage = LOWORD(lParam); si.nPos = scrollX;
-            SetScrollInfo(hwnd, SB_HORZ, &si, TRUE);
-            si.nMax = imgHeight; si.nPage = HIWORD(lParam); si.nPos = scrollY;
-            SetScrollInfo(hwnd, SB_VERT, &si, TRUE);
+        case WM_SIZE:
+            UpdateScrollbars(hwnd);
             return 0;
-        }
 
         case WM_HSCROLL:
         case WM_VSCROLL: {
+            int oldPos;
             int bar = (uMsg == WM_HSCROLL) ? SB_HORZ : SB_VERT;
-            int* pos = (uMsg == WM_HSCROLL) ? &scrollX : &scrollY;
             SCROLLINFO si = { sizeof(SCROLLINFO), SIF_ALL };
             GetScrollInfo(hwnd, bar, &si);
+
+            oldPos = si.nPos;
             switch (LOWORD(wParam)) {
                 case SB_TOP:           si.nPos = si.nMin; break;
                 case SB_BOTTOM:        si.nPos = si.nMax; break;
@@ -138,11 +162,15 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam) 
                 case SB_PAGEDOWN:      si.nPos += si.nPage; break;
                 case SB_THUMBTRACK:    si.nPos = si.nTrackPos; break;
             }
+
             si.fMask = SIF_POS;
             SetScrollInfo(hwnd, bar, &si, TRUE);
-            GetScrollInfo(hwnd, bar, &si);
-            *pos = si.nPos;
-            InvalidateRect(hwnd, NULL, TRUE);
+            GetScrollInfo(hwnd, bar, &si); // Get clamped pos
+
+            if (uMsg == WM_HSCROLL) scrollX = si.nPos;
+            else scrollY = si.nPos;
+
+            if (oldPos != si.nPos) InvalidateRect(hwnd, NULL, TRUE);
             return 0;
         }
 

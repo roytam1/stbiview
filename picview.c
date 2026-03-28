@@ -17,6 +17,98 @@ HPALETTE hPalette = NULL; // New: Palette handle
 int imgWidth = 0, imgHeight = 0;
 int scrollX = 0, scrollY = 0;
 
+typedef struct { BYTE r, g, b; } RGB_TRIPLE;
+
+// Standard 16-color VGA Palette
+RGB_TRIPLE vga16[16] = {
+    {0,0,0}, {128,0,0}, {0,128,0}, {128,128,0}, {0,0,128}, {128,0,128}, {0,128,128}, {192,192,192},
+    {128,128,128}, {255,0,0}, {0,255,0}, {255,255,0}, {0,0,255}, {255,0,255}, {0,255,255}, {255,255,255}
+};
+
+RGB_TRIPLE web216[216]; // The "6x6x6" color cube
+
+void InitWebSafePalette() {
+    int r, g, b, i = 0;
+    for (r = 0; r < 6; r++)
+        for (g = 0; g < 6; g++)
+            for (b = 0; b < 6; b++) {
+                web216[i].r = r * 51;
+                web216[i].g = g * 51;
+                web216[i].b = b * 51;
+                i++;
+            }
+}
+
+// Helper: Find closest color in a palette
+int FindClosestColor(RGB_TRIPLE color, RGB_TRIPLE* palette, int count) {
+    int i, closest = 0;
+    long minDistance = 2000000; // Large value
+    for (i = 0; i < count; i++) {
+        long dr, dg, db, distance;
+        dr = color.r - palette[i].r;
+        dg = color.g - palette[i].g;
+        db = color.b - palette[i].b;
+        distance = dr*dr + dg*dg + db*db;
+        if (distance < minDistance) {
+            minDistance = distance;
+            closest = i;
+        }
+    }
+    return closest;
+}
+
+// Floyd-Steinberg Dither Function
+void ApplyDithering(unsigned char* pixels, int width, int height, int colorCount) {
+    // Error buffer: current row and next row to save memory
+    // Layout: [red, green, blue] per pixel
+    int i, palCount, x, y;
+    RGB_TRIPLE *pal;
+    int* errorBuf = (int*)calloc(width * height * 3, sizeof(int));
+    if (!errorBuf) return;
+
+    for (i = 0; i < width * height * 3; i++) errorBuf[i] = pixels[i] << 8;
+
+    pal = (colorCount == 16) ? vga16 : web216;
+    palCount = (colorCount == 16) ? 16 : 216;
+
+    for (y = 0; y < height; y++) {
+        for (x = 0; x < width; x++) {
+            RGB_TRIPLE oldP, newP;
+            int errR, errG, errB, i;
+            int dx[] = {1, -1, 0, 1}, dy[] = {0, 1, 1, 1}, w[] = {7, 3, 5, 1};
+            int pIdx, idx = (y * width + x) * 3;
+
+            oldP.r = (BYTE)max(0, min(255, errorBuf[idx] >> 8));
+            oldP.g = (BYTE)max(0, min(255, errorBuf[idx+1] >> 8));
+            oldP.b = (BYTE)max(0, min(255, errorBuf[idx+2] >> 8));
+
+            pIdx = FindClosestColor(oldP, pal, palCount);
+            newP = pal[pIdx];
+
+            pixels[idx]   = newP.r;
+            pixels[idx+1] = newP.g;
+            pixels[idx+2] = newP.b;
+
+            errR = errorBuf[idx]   - (newP.r << 8);
+            errG = errorBuf[idx+1] - (newP.g << 8);
+            errB = errorBuf[idx+2] - (newP.b << 8);
+
+            // Diffusion: 7/16 right, 3/16 down-left, 5/16 down, 1/16 down-right
+            // We use bit shifts for speed: (err * 7) >> 4 is approx err * (7/16)
+            for (i = 0; i < 4; i++) {
+                int nx = x + dx[i], ny = y + dy[i];
+                if (nx >= 0 && nx < width && ny < height) {
+                    int nIdx = (ny * width + nx) * 3;
+                    errorBuf[nIdx]   += (errR * w[i]) >> 4;
+                    errorBuf[nIdx+1] += (errG * w[i]) >> 4;
+                    errorBuf[nIdx+2] += (errB * w[i]) >> 4;
+                }
+            }
+        }
+    }
+    free(errorBuf);
+}
+
 int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrev, LPSTR lpCmdLine, int nCmdShow) {
     HWND hwnd;
     MSG msg;
@@ -89,12 +181,22 @@ void LoadImageFromPath(HWND hwnd, char* filePath) {
     } else {
         BITMAPINFO bmi = {0};
         void *pBits;
-        HDC hdc;
+        HDC hdc, screenHdc;
         RECT r;
-        int i;
+        int bpp, i;
+
+        // Detect if we should dither (e.g., if bit depth is low)
+        screenHdc = GetDC(NULL);
+        bpp = GetDeviceCaps(screenHdc, BITSPIXEL);
+        ReleaseDC(NULL, screenHdc);
 
         if (hBitmap) DeleteObject(hBitmap);
         if (hPalette) DeleteObject(hPalette);
+
+        if (bpp <= 8) {
+            InitWebSafePalette();
+            ApplyDithering(data, imgWidth, imgHeight, (bpp <= 4) ? 16 : 256);
+        }
 
         // 1. Create a Halftone Palette for 8-bit displays
         hdc = GetDC(hwnd);

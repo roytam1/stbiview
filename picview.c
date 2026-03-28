@@ -427,6 +427,7 @@ void UpdateScrollbars(HWND hwnd) {
     int cw, ch;
     RECT clientRect;
     SCROLLINFO si = { sizeof(SCROLLINFO), SIF_RANGE | SIF_PAGE | SIF_DISABLENOSCROLL };
+    MyGetScrollInfo(hwnd, SB_HORZ, &si);
 
     GetClientRect(hwnd, &clientRect);
     cw = clientRect.right;
@@ -435,12 +436,14 @@ void UpdateScrollbars(HWND hwnd) {
     // Horizontal
     si.nMin = 0;
     si.nMax = imgWidth;
+    if(MyGetScrollInfo == MyGetScrollInfo_fallback) si.nMax -= cw;
     si.nPage = cw;
     MySetScrollInfo(hwnd, SB_HORZ, &si, TRUE);
 
     // Vertical
     si.nMin = 0;
     si.nMax = imgHeight;
+    if(MyGetScrollInfo == MyGetScrollInfo_fallback) si.nMax -= ch;
     si.nPage = ch;
     MySetScrollInfo(hwnd, SB_VERT, &si, TRUE);
 

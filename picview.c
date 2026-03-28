@@ -8,6 +8,282 @@
 #define STBI_NO_SIMD
 #include "stb_image.h"
 
+/* MyVerInfo from GreenPad */
+/* MYVERINFO defination */
+#pragma pack(push,1)
+typedef struct _MYVERINFO {
+	union {
+		DWORD dwVersionAndBuild;
+		struct {
+			WORD wBuild;
+			union {
+				WORD wVer;
+				struct {
+					BYTE cMinor;
+					BYTE cMajor;
+				} u;
+			} ver;
+		} vb;
+	} verbuild;
+	WORD wPlatform;
+	WORD wType;
+} MYVERINFO;
+
+typedef struct _MYVERINFO_PV {
+	WORD wBuild;
+	union {
+		DWORD dwPlatformAndVersion;
+		struct {
+			WORD wVer;
+			WORD wPlatform;
+		} pv;
+	} platver;
+	WORD wType;
+} MYVERINFO_PV;
+#pragma pack(pop)
+
+#define MVI_KERNELEX	0x8000
+
+#define MVI_MAJOR	verbuild.vb.ver.u.cMajor
+#define MVI_MINOR	verbuild.vb.ver.u.cMinor
+#define MVI_VER		verbuild.vb.ver.wVer
+#define MVI_BUILD	verbuild.vb.wBuild
+#define MVI_VBN		verbuild.dwVersionAndBuild
+
+#define MPV_PV		platver.dwPlatformAndVersion
+
+// generate WORD of MMmm (for example Win7(NT 6.1) = 0601)
+#define MKVER(M, m) ( (WORD)( (BYTE)(M)<<8 | (BYTE)(m) ) )
+// generate DWORD of MMmmbbbb (for example Win7(NT 6.1.7601) = 06011db1)
+#define MKVBN(M, m, b) ( (DWORD)( (BYTE)(M)<<24 | (BYTE)(m)<<16 | (WORD)(b) ) )
+// generate DWORD of PPPPMMmm (for example Win7(NT 6.1.7601) = 00020601)
+#define MKPV(P, M, m) ( (DWORD)( (WORD)(P)<<16 | (BYTE)(M)<<8 | (BYTE)(m) ) )
+
+/* MYVERINFO declaration */
+MYVERINFO		g_mvi;
+BOOL		g_mvi_init = 0;
+
+/* MYVERINFO (helper) functions */
+BOOL GetNtVersionNumbers(DWORD* dwMajorVer, DWORD* dwMinorVer,DWORD* dwBuildNumber)
+{
+	// call NTDLL.RtlGetNtVersionNumbers for real version numbers
+	// it is firstly existed as `RtlGetNtVersionInfo` in XP Beta Build 2495 and quickly renamed to retail name in Build 2517
+	BOOL bRet = FALSE;
+	HMODULE hModNtdll = NULL;
+	if (hModNtdll = LoadLibrary("ntdll.dll"))
+	{
+		typedef void (WINAPI *pfRTLGETNTVERSIONNUMBERS)(DWORD*, DWORD*, DWORD*);
+		pfRTLGETNTVERSIONNUMBERS pfRtlGetNtVersionNumbers;
+		pfRtlGetNtVersionNumbers = (pfRTLGETNTVERSIONNUMBERS)GetProcAddress(hModNtdll, "RtlGetNtVersionNumbers");
+
+		if (pfRtlGetNtVersionNumbers)
+		{
+			pfRtlGetNtVersionNumbers(dwMajorVer, dwMinorVer, dwBuildNumber);
+			*dwBuildNumber &= 0x0ffff;
+			bRet = TRUE;
+		}
+
+		FreeLibrary(hModNtdll);
+		hModNtdll = NULL;
+	}
+	return bRet;
+}
+
+void init_mvi()
+{
+	OSVERSIONINFOA osvi;
+
+	if(g_mvi_init) return;
+	// zero-filling structs for safety
+	memset(&g_mvi, 0, sizeof(MYVERINFO));
+	memset(&osvi, 0, sizeof(OSVERSIONINFOA));
+
+	osvi.dwOSVersionInfoSize = sizeof(OSVERSIONINFOA);
+
+	if(GetNtVersionNumbers(&osvi.dwMajorVersion, &osvi.dwMinorVersion,&osvi.dwBuildNumber)) {
+		g_mvi.MVI_MINOR = (BYTE)osvi.dwMinorVersion;
+		g_mvi.MVI_MAJOR = (BYTE)osvi.dwMajorVersion;
+		g_mvi.MVI_BUILD = (WORD)osvi.dwBuildNumber;
+		g_mvi.wPlatform = VER_PLATFORM_WIN32_NT;
+		g_mvi.wType = 2;
+	} else {
+		typedef BOOL (WINAPI *PGVEXA)(OSVERSIONINFOA*);
+		PGVEXA pGVEXA;
+		pGVEXA = (PGVEXA) GetProcAddress(GetModuleHandle(TEXT("kernel32.dll")), "GetVersionExA");
+		if(pGVEXA) {
+			pGVEXA(&osvi);
+
+			g_mvi.MVI_MINOR = (BYTE)osvi.dwMinorVersion;
+			g_mvi.MVI_MAJOR = (BYTE)osvi.dwMajorVersion;
+			g_mvi.MVI_BUILD = (WORD)osvi.dwBuildNumber;
+			g_mvi.wPlatform = (WORD)osvi.dwPlatformId;
+			g_mvi.wType = 1;
+		} else {
+			osvi.dwBuildNumber = GetVersion();
+
+			g_mvi.MVI_MAJOR = (LOBYTE(LOWORD(osvi.dwBuildNumber)));
+			g_mvi.MVI_MINOR = (HIBYTE(LOWORD(osvi.dwBuildNumber)));
+
+			if (osvi.dwBuildNumber < 0x80000000) {
+				g_mvi.MVI_BUILD = (HIWORD(osvi.dwBuildNumber));
+				g_mvi.wPlatform = VER_PLATFORM_WIN32_NT;
+			}
+
+			if (g_mvi.wPlatform != VER_PLATFORM_WIN32_NT) {
+				if (g_mvi.MVI_MAJOR == 3) g_mvi.wPlatform = VER_PLATFORM_WIN32s;
+				else g_mvi.wPlatform = VER_PLATFORM_WIN32_WINDOWS;
+
+				//g_mvi.MVI_BUILD = (DWORD)(HIWORD(osvi.dwBuildNumber & 0x7FFFFFFF)); // when dwPlatformId == VER_PLATFORM_WIN32_WINDOWS, HIWORD(dwVersion) is reserved
+			}
+
+		}
+	}
+	// check system32 if verion is > 3.10
+	if(g_mvi.wPlatform == VER_PLATFORM_WIN32_NT && g_mvi.MVI_BUILD > MKVER(3, 10)) {
+		char cSysDir[256];
+		int iSysDirLen = 0;
+		iSysDirLen = GetSystemDirectoryA(cSysDir, 256);
+		if(iSysDirLen && cSysDir[iSysDirLen-1] != '2') {
+			g_mvi.wType |= MVI_KERNELEX;
+		}
+	}
+	g_mvi_init = 1;
+}
+
+BOOL mvi_isNT()
+{
+	if(!g_mvi_init) init_mvi();
+	return g_mvi.wPlatform==VER_PLATFORM_WIN32_NT;
+}
+
+WORD mvi_getOSBuild()
+{
+	if(!g_mvi_init) init_mvi();
+	return g_mvi.MVI_BUILD;
+}
+
+BOOL mvi_isBuildGreater(DWORD dwTarget)
+{
+	if(!g_mvi_init) init_mvi();
+	return g_mvi.MVI_VBN >= dwTarget;
+}
+
+BOOL mvi_isWin32s()
+{
+	if(!g_mvi_init) init_mvi();
+	return g_mvi.wPlatform==VER_PLATFORM_WIN32s;
+}
+/* end of MyVerInfo */
+
+/* [G|S]etScrollInfo wrappers from GreenPad */
+
+// Win32s scroll range is mimited to 32767
+#define MAX_SCROLL_WIN32S 32500
+#define MAX_MULT_WIN32S (32768-MAX_SCROLL)
+// Windows NT: scrollrange is limited to 65535
+#define MAX_SCROLL_NT 65400
+#define MAX_MULT_NT (65536-MAX_SCROLL)
+
+/* [G|S]etScrollInfo wrappers globals */
+int MAX_SCROLL = 0, MAX_MULT = 0;
+
+typedef int (WINAPI *SSCRINF)(HWND, int, LPSCROLLINFO, BOOL);
+int WINAPI MySetScrollInfo_fallback(HWND hwnd, int nBar, LPSCROLLINFO lpsi, BOOL redraw)
+{
+	// Smart Fallback...
+	// We must use SetScrollRange but it is mimited to 65535.
+	// So we can avoid oveflow by dividing range and position values
+	// In GreenPad we can assume that only nMax can go beyond range.
+	int MULT=1;
+	int nMax = lpsi->nMax;
+	// If we go beyond 65400 then we use a divider
+	if (nMax > MAX_SCROLL)
+	{   // 65501 - 65535 = 35 values MULT from 2-136
+		// Like this the new range is around 8912896 instead of 65535
+		MULT = min( (nMax / MAX_SCROLL) + 1,  MAX_MULT );
+		// We store the divider in the last 135 values
+		// of the max scroll range.
+		nMax = MAX_SCROLL + MULT - 1 ; // 65401 => MULT = 2
+	}
+
+	if (lpsi->fMask|SIF_RANGE)
+		SetScrollRange( hwnd, nBar, lpsi->nMin, nMax, FALSE );
+
+	return SetScrollPos( hwnd, nBar, lpsi->nPos/MULT, redraw );
+}
+int WINAPI MySetScrollInfo_init(HWND hwnd, int nBar, LPSCROLLINFO lpsi, BOOL redraw);
+static SSCRINF MySetScrollInfo = MySetScrollInfo_init;
+
+int WINAPI MySetScrollInfo_init(HWND hwnd, int nBar, LPSCROLLINFO lpsi, BOOL redraw)
+{
+	if( MySetScrollInfo == MySetScrollInfo_init ) {
+		if(!MAX_SCROLL) {
+			if(mvi_isWin32s()) {
+				MAX_SCROLL = MAX_SCROLL_WIN32S;
+				MAX_MULT = MAX_MULT_WIN32S;
+			} else {
+				MAX_SCROLL = MAX_SCROLL_NT;
+				MAX_MULT = MAX_MULT_NT;
+			}
+		}
+		MySetScrollInfo = (SSCRINF)GetProcAddress(GetModuleHandleA("USER32.DLL"), "SetScrollInfo");
+
+		// Should be supported since Windows NT 3.51...
+		if( !(MySetScrollInfo && ((!mvi_isNT() && mvi_getOSBuild()>=275) || (mvi_isNT() && mvi_isBuildGreater(MKVBN(3,51,944))))) ) {
+			MySetScrollInfo = MySetScrollInfo_fallback;
+		}
+	}
+
+	return MySetScrollInfo( hwnd, nBar, lpsi, redraw );
+}
+
+typedef int (WINAPI *GSCRINF)(HWND, int, LPSCROLLINFO);
+int WINAPI MyGetScrollInfo_fallback(HWND hwnd, int nBar, LPSCROLLINFO lpsi)
+{
+	// Smart Fallback...
+	if( lpsi->fMask|SIF_RANGE )
+		GetScrollRange( hwnd, nBar, &lpsi->nMin, &lpsi->nMax);
+
+	lpsi->nPos = GetScrollPos( hwnd, nBar );
+	// Scroll range indicates a multiplier was used...
+	if( lpsi->nMax > MAX_SCROLL )
+	{ // Apply multipler
+		int MULT = lpsi->nMax - MAX_SCROLL + 1; // 65401 => MULT = 2
+		lpsi->nMax      *= MULT;
+		lpsi->nPos      *= MULT;
+		lpsi->nTrackPos *= MULT; // This has to be set by the user.
+	}
+	return 1; // sucess!
+}
+
+int WINAPI MyGetScrollInfo_init(HWND hwnd, int nBar, LPSCROLLINFO lpsi);
+static GSCRINF MyGetScrollInfo = MyGetScrollInfo_init;
+
+int WINAPI MyGetScrollInfo_init(HWND hwnd, int nBar, LPSCROLLINFO lpsi)
+{
+	if( MyGetScrollInfo == MyGetScrollInfo_init ) {
+		if(!MAX_SCROLL) {
+			if(mvi_isWin32s()) {
+				MAX_SCROLL = MAX_SCROLL_WIN32S;
+				MAX_MULT = MAX_MULT_WIN32S;
+			} else {
+				MAX_SCROLL = MAX_SCROLL_NT;
+				MAX_MULT = MAX_MULT_NT;
+			}
+		}
+
+		MyGetScrollInfo = (GSCRINF)GetProcAddress(GetModuleHandleA("USER32.DLL"), "GetScrollInfo");
+
+		// Should be supported since Windows NT 3.51...
+		if( !(MyGetScrollInfo && ((!mvi_isNT() && mvi_getOSBuild()>=275) || (mvi_isNT() && mvi_isBuildGreater(MKVBN(3,51,944))))) ) {
+			MyGetScrollInfo = MyGetScrollInfo_fallback;
+		}
+	}
+
+	return MyGetScrollInfo( hwnd, nBar, lpsi );
+}
+/* end of [G|S]etScrollInfo */
+
 LRESULT CALLBACK WindowProc(HWND, UINT, WPARAM, LPARAM);
 void LoadImageFromPath(HWND hwnd, char* filePath);
 void OpenPicFile(HWND hwnd);
@@ -155,13 +431,13 @@ void UpdateScrollbars(HWND hwnd) {
     si.nMin = 0;
     si.nMax = imgWidth;
     si.nPage = cw;
-    SetScrollInfo(hwnd, SB_HORZ, &si, TRUE);
+    MySetScrollInfo(hwnd, SB_HORZ, &si, TRUE);
 
     // Vertical
     si.nMin = 0;
     si.nMax = imgHeight;
     si.nPage = ch;
-    SetScrollInfo(hwnd, SB_VERT, &si, TRUE);
+    MySetScrollInfo(hwnd, SB_VERT, &si, TRUE);
 
     // Ensure scroll position doesn't hang out in "dead space" after shrink
     scrollX = GetScrollPos(hwnd, SB_HORZ);
@@ -385,7 +661,8 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam) 
             int oldPos;
             int bar = (uMsg == WM_HSCROLL) ? SB_HORZ : SB_VERT;
             SCROLLINFO si = { sizeof(SCROLLINFO), SIF_ALL };
-            GetScrollInfo(hwnd, bar, &si);
+            si.nTrackPos = HIWORD(wParam);
+            MyGetScrollInfo(hwnd, bar, &si);
 
             oldPos = si.nPos;
             switch (LOWORD(wParam)) {
@@ -399,8 +676,8 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam) 
             }
 
             si.fMask = SIF_POS;
-            SetScrollInfo(hwnd, bar, &si, TRUE);
-            GetScrollInfo(hwnd, bar, &si); // Get clamped position
+            MySetScrollInfo(hwnd, bar, &si, TRUE);
+            MyGetScrollInfo(hwnd, bar, &si); // Get clamped position
 
             if (uMsg == WM_HSCROLL) scrollX = si.nPos;
             else scrollY = si.nPos;

@@ -186,6 +186,7 @@ BOOL mvi_isWin32s()
 
 /* [G|S]etScrollInfo wrappers globals */
 int MAX_SCROLL = 0, MAX_MULT = 0;
+int V_PAGE = 0, H_PAGE = 0;
 
 typedef int (WINAPI *SSCRINF)(HWND, int, LPSCROLLINFO, BOOL);
 int WINAPI MySetScrollInfo_fallback(HWND hwnd, int nBar, LPSCROLLINFO lpsi, BOOL redraw)
@@ -205,6 +206,8 @@ int WINAPI MySetScrollInfo_fallback(HWND hwnd, int nBar, LPSCROLLINFO lpsi, BOOL
 		// of the max scroll range.
 		nMax = MAX_SCROLL + MULT - 1 ; // 65401 => MULT = 2
 	}
+	if(nBar == SB_HORZ) H_PAGE = lpsi->nPage;
+	else /* nBar == SB_VERT */ V_PAGE = lpsi->nPage;
 
 	if (lpsi->fMask|SIF_RANGE)
 		SetScrollRange( hwnd, nBar, lpsi->nMin, nMax, FALSE );
@@ -253,6 +256,8 @@ int WINAPI MyGetScrollInfo_fallback(HWND hwnd, int nBar, LPSCROLLINFO lpsi)
 		lpsi->nPos      *= MULT;
 		lpsi->nTrackPos *= MULT; // This has to be set by the user.
 	}
+	if(nBar == SB_HORZ) lpsi->nPage = H_PAGE;
+	else /* nBar == SB_VERT */ lpsi->nPage = V_PAGE;
 	return 1; // sucess!
 }
 

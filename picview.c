@@ -297,6 +297,7 @@ HBITMAP hBitmap = NULL;
 HPALETTE hPalette = NULL; // New: Palette handle
 int imgWidth = 0, imgHeight = 0;
 int scrollX = 0, scrollY = 0;
+int noFSdither = 0;
 
 typedef struct { BYTE r, g, b; } RGB_TRIPLE;
 
@@ -477,7 +478,7 @@ void LoadImageFromPath(HWND hwnd, char* filePath) {
         if (hBitmap) DeleteObject(hBitmap);
         if (hPalette) DeleteObject(hPalette);
 
-        if (bpp <= 8) {
+        if (!noFSdither && bpp <= 8) {
             InitWebSafePalette();
             ApplyDithering(data, imgWidth, imgHeight, (bpp <= 4) ? 16 : 256);
         }
@@ -657,6 +658,9 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam) 
                 // File Operations
                 case 'O':
                     OpenPicFile(hwnd);
+                    break;
+                case 'D':
+                    noFSdither = !noFSdither;
                     break;
                 case VK_ESCAPE:
                     PostQuitMessage(0);

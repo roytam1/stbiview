@@ -186,20 +186,30 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam) 
             HDC hdc = BeginPaint(hwnd, &ps);
             if (hBitmap) {
                 HDC hdcMem;
+
+                hdcMem = CreateCompatibleDC(hdc);
+                SelectObject(hdcMem, hBitmap);
+
                 // IMPORTANT: Select and Realize Palette in the Paint DC
                 if (hPalette) {
                     SelectPalette(hdc, hPalette, FALSE);
                     RealizePalette(hdc);
+                    SelectPalette(hdcMem, hPalette, FALSE);
+                    RealizePalette(hdcMem);
                 }
 
-                hdcMem = CreateCompatibleDC(hdc);
-                SelectObject(hdcMem, hBitmap);
-                
+#if 1
+                // Set scaling mode for better quality
+                SetStretchBltMode(hdc, HALFTONE);
+                // Requirement for HALFTONE: Set brush origin
+                SetBrushOrgEx(hdc, 0, 0, NULL);
+#else
                 // Use SetStretchBltMode for better quality in 8-bit
                 SetStretchBltMode(hdc, COLORONCOLOR);
+#endif
 
-                BitBlt(hdc, 0, 0, ps.rcPaint.right, ps.rcPaint.bottom, 
-                       hdcMem, scrollX, scrollY, SRCCOPY);
+                StretchBlt(hdc, 0, 0, ps.rcPaint.right, ps.rcPaint.bottom, 
+                       hdcMem, scrollX, scrollY, ps.rcPaint.right, ps.rcPaint.bottom, SRCCOPY);
                 
                 DeleteDC(hdcMem);
             }

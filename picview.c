@@ -5,6 +5,7 @@
 #include <commdlg.h>
 
 LRESULT CALLBACK WindowProc(HWND, UINT, WPARAM, LPARAM);
+void LoadImageFromPath(HWND hwnd, char* filePath);
 void OpenPicFile(HWND hwnd);
 
 HBITMAP hBitmap = NULL;
@@ -24,11 +25,18 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrev, LPSTR lpCmdLine, int nC
 
     RegisterClass(&wc);
 
-    hwnd = CreateWindowEx(WS_EX_ACCEPTFILES, "NT4_STB_Viewer", "NT4 Image Viewer (stb_image) - Press 'O' to open file",
+    hwnd = CreateWindowEx(WS_EX_ACCEPTFILES, "NT4_STB_Viewer", "NT4 Image Viewer - Press 'O' to open file",
         WS_OVERLAPPEDWINDOW | WS_HSCROLL | WS_VSCROLL,
         CW_USEDEFAULT, CW_USEDEFAULT, 800, 600, NULL, NULL, hInstance, NULL);
 
     ShowWindow(hwnd, nCmdShow);
+
+    // --- COMMAND LINE PROCESSING ---
+    // __argc and __argv are globals defined in stdlib.h / TCHAR.h
+    // index 0 is the EXE path, index 1 is the first argument (the file)
+    if (__argc > 1) {
+        LoadImageFromPath(hwnd, __argv[1]);
+    }
 
     while (GetMessage(&msg, NULL, 0, 0)) {
         TranslateMessage(&msg);
@@ -69,7 +77,12 @@ void LoadImageFromPath(HWND hwnd, char* filePath) {
     // stb_image loads pixels as RGBA/RGB
     unsigned char *data = stbi_load(filePath, &imgWidth, &imgHeight, &channels, 4);
 
-    if (data) {
+    if (!data) {
+        char errBuf[MAX_PATH + 50];
+        wsprintf(errBuf, "Failed to load:\n%s", filePath);
+        MessageBox(hwnd, errBuf, "Error", MB_ICONERROR);
+        return;
+    } else {
         BITMAPINFO bmi = {0};
         void *pBits;
         HDC hdc;

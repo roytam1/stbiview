@@ -1,8 +1,12 @@
+#define MAINWIN_CLASS "NT4_STB_Viewer"
+#define MAINWIN_TITLE "Simple Image Viewer"
+
+#include <windows.h>
+#include <commdlg.h>
+
 #define STB_IMAGE_IMPLEMENTATION
 #define STBI_NO_SIMD
 #include "stb_image.h"
-#include <windows.h>
-#include <commdlg.h>
 
 LRESULT CALLBACK WindowProc(HWND, UINT, WPARAM, LPARAM);
 void LoadImageFromPath(HWND hwnd, char* filePath);
@@ -21,11 +25,11 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrev, LPSTR lpCmdLine, int nC
     wc.hInstance     = hInstance;
     wc.hCursor       = LoadCursor(NULL, IDC_ARROW);
     wc.hbrBackground = (HBRUSH)(COLOR_WINDOW + 1);
-    wc.lpszClassName = "NT4_STB_Viewer";
+    wc.lpszClassName = MAINWIN_CLASS;
 
     RegisterClass(&wc);
 
-    hwnd = CreateWindowEx(WS_EX_ACCEPTFILES, "NT4_STB_Viewer", "NT4 Image Viewer - Press 'O' to open file",
+    hwnd = CreateWindowEx(WS_EX_ACCEPTFILES, MAINWIN_CLASS, MAINWIN_TITLE " - Press 'O' to open file",
         WS_OVERLAPPEDWINDOW | WS_HSCROLL | WS_VSCROLL,
         CW_USEDEFAULT, CW_USEDEFAULT, 800, 600, NULL, NULL, hInstance, NULL);
 

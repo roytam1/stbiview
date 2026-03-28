@@ -79,7 +79,7 @@ void UpdateScrollbars(HWND hwnd) {
 void LoadImageFromPath(HWND hwnd, char* filePath) {
     int channels;
     // stb_image loads pixels as RGBA/RGB
-    unsigned char *data = stbi_load(filePath, &imgWidth, &imgHeight, &channels, 4);
+    unsigned char *data = stbi_load(filePath, &imgWidth, &imgHeight, &channels, 3);
 
     if (!data) {
         char errBuf[MAX_PATH + 50];
@@ -92,7 +92,6 @@ void LoadImageFromPath(HWND hwnd, char* filePath) {
         HDC hdc;
         RECT r;
         int i;
-        unsigned char *pDest;
 
         if (hBitmap) DeleteObject(hBitmap);
         if (hPalette) DeleteObject(hPalette);
@@ -106,11 +105,11 @@ void LoadImageFromPath(HWND hwnd, char* filePath) {
         bmi.bmiHeader.biWidth = imgWidth;
         bmi.bmiHeader.biHeight = -imgHeight;
         bmi.bmiHeader.biPlanes = 1;
-        bmi.bmiHeader.biBitCount = 32;
+        bmi.bmiHeader.biBitCount = 24;
         bmi.bmiHeader.biCompression = BI_RGB;
 
         // Swizzle RGBA -> BGRA
-        for (i = 0; i < imgWidth * imgHeight * 4; i += 4) {
+        for (i = 0; i < imgWidth * imgHeight * 3; i += 3) {
             unsigned char r = data[i];
             data[i] = data[i + 2];
             data[i + 2] = r;
@@ -121,7 +120,7 @@ void LoadImageFromPath(HWND hwnd, char* filePath) {
 
         if (hBitmap && pBits) {
             // Success: Copy swizzled data to the DIB pointer
-            memcpy(pBits, data, imgWidth * imgHeight * 4);
+            memcpy(pBits, data, imgWidth * imgHeight * 3);
         }
         else {
             // --- METHOD 2: Fallback (DDB + SetDIBits) ---

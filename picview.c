@@ -421,7 +421,8 @@ BOOL SaveBitmapToFile(HBITMAP hBmp, const char* szFileName) {
     bi.biCompression = BI_RGB;
 
     // Calculate row size (must be DWORD aligned)
-    dwRowSize = ((bmp.bmWidth * bi.biBitCount + 31) / 32) * 4;
+    dwRowSize = bmp.bmWidth*3;
+    dwRowSize = (dwRowSize+3) & ~3;
     dwDataSize = dwRowSize * bmp.bmHeight;
 
     // Allocate memory for pixels

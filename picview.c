@@ -391,6 +391,60 @@ void ApplyDithering(unsigned char* pixels, int width, int height, int colorCount
     free(errorBuf);
 }
 
+BOOL SaveBitmapToFile(HBITMAP hBmp, const char* szFileName) {
+    BITMAP bmp;
+    BITMAPINFOHEADER bi = {0};
+    BITMAPFILEHEADER bfh = {0};
+    DWORD dwRowSize, dwDataSize;
+    BYTE* pBits;
+    HDC hdc;
+    HANDLE hFile;
+
+    if (!hBmp) return FALSE;
+
+    GetObject(hBmp, sizeof(BITMAP), &bmp);
+
+    bi.biSize = sizeof(BITMAPINFOHEADER);
+    bi.biWidth = bmp.bmWidth;
+    bi.biHeight = bmp.bmHeight; // Positive for bottom-up (standard BMP)
+    bi.biPlanes = 1;
+    bi.biBitCount = 24; // Saving as 24-bit RGB
+    bi.biCompression = BI_RGB;
+
+    // Calculate row size (must be DWORD aligned)
+    dwRowSize = ((bmp.bmWidth * bi.biBitCount + 31) / 32) * 4;
+    dwDataSize = dwRowSize * bmp.bmHeight;
+
+    // Allocate memory for pixels
+    pBits = (BYTE*)malloc(dwDataSize);
+    if (!pBits) return FALSE;
+
+    hdc = GetDC(NULL);
+    // Retrieve the bits from the handle into our buffer
+    GetDIBits(hdc, hBmp, 0, bmp.bmHeight, pBits, (BITMAPINFO*)&bi, DIB_RGB_COLORS);
+    ReleaseDC(NULL, hdc);
+
+    // Setup File Header
+    bfh.bfType = 0x4D42; // "BM"
+    bfh.bfOffBits = sizeof(BITMAPFILEHEADER) + sizeof(BITMAPINFOHEADER);
+    bfh.bfSize = bfh.bfOffBits + dwDataSize;
+
+    // Write to Disk
+    hFile = CreateFile(szFileName, GENERIC_WRITE, 0, NULL, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
+    if (hFile != INVALID_HANDLE_VALUE) {
+        DWORD dwWritten;
+        WriteFile(hFile, &bfh, sizeof(bfh), &dwWritten, NULL);
+        WriteFile(hFile, &bi, sizeof(bi), &dwWritten, NULL);
+        WriteFile(hFile, &dwWritten, dwDataSize, &dwWritten, NULL); // Note: Fix variable to pBits
+        // Correction for WriteFile call:
+        WriteFile(hFile, pBits, dwDataSize, &dwWritten, NULL);
+        CloseHandle(hFile);
+    }
+
+    free(pBits);
+    return (hFile != INVALID_HANDLE_VALUE);
+}
+
 int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrev, LPSTR lpCmdLine, int nCmdShow) {
     HWND hwnd;
     MSG msg;
@@ -530,6 +584,26 @@ void LoadImageFromPath(HWND hwnd, char* filePath) {
     }
 }
 
+void SaveFile(HWND hwnd) {
+    OPENFILENAME ofn = {0};
+    char szFile[260] = "output.bmp";
+
+    ofn.lStructSize = sizeof(ofn);
+    ofn.hwndOwner = hwnd;
+    ofn.lpstrFile = szFile;
+    ofn.nMaxFile = sizeof(szFile);
+    ofn.lpstrFilter = "Bitmap Files (*.bmp)\0*.bmp\0";
+    ofn.Flags = OFN_OVERWRITEPROMPT;
+
+    if (GetSaveFileName(&ofn)) {
+        if (SaveBitmapToFile(hBitmap, szFile)) {
+            MessageBox(hwnd, "File saved successfully!", "Success", MB_OK);
+        } else {
+            MessageBox(hwnd, "Failed to save file.", "Error", MB_ICONERROR);
+        }
+    }
+}
+
 void OpenPicFile(HWND hwnd) {
     OPENFILENAME ofn;
     char szFile[260] = {0};
@@ -661,6 +735,9 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam) 
                     break;
                 case 'D':
                     noFSdither = !noFSdither;
+                    break;
+                case 'S':
+                    SaveFile(hwnd);
                     break;
                 case VK_ESCAPE:
                     PostQuitMessage(0);

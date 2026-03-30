@@ -5,6 +5,13 @@
 #include <windows.h>
 #include <commdlg.h>
 
+#ifndef WM_MOUSEWHEEL
+#define WM_MOUSEWHEEL 0x020A
+#endif
+#ifndef WHEEL_DELTA
+#define WHEEL_DELTA                     120
+#endif
+
 #define STB_IMAGE_IMPLEMENTATION
 #define STBI_NO_SIMD
 #include "stb_image.h"
@@ -732,6 +739,18 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam) 
 
             // Must release the handle allocated by the shell
             DragFinish(hDrop);
+            return 0;
+        }
+
+        case WM_MOUSEWHEEL: {
+            // GET_WHEEL_DELTA_WPARAM(wParam) - Extracting the delta manually for old headers
+            short zDelta = (short)HIWORD(wParam);
+
+            // Delta is usually 120 (WHEEL_DELTA), so we scroll 3 'lines' per click
+            int i, steps = zDelta / WHEEL_DELTA;
+            for (i = 0; i < abs(steps); i++) {
+                SendMessage(hwnd, GetKeyState(VK_CONTROL) & 0x8000 ? WM_HSCROLL : WM_VSCROLL, (zDelta > 0) ? SB_LINEUP : SB_LINEDOWN, 0);
+            }
             return 0;
         }
 

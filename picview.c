@@ -1,5 +1,6 @@
 #define MAINWIN_CLASS "NT4_STB_Viewer"
 #define MAINWIN_TITLE "Simple Image Viewer"
+#define MAINWIN_TITLE_SUFFIX "Press 'O' to open file"
 
 #include <windows.h>
 #include <commdlg.h>
@@ -295,9 +296,10 @@ void OpenPicFile(HWND hwnd);
 
 HBITMAP hBitmap = NULL;
 HPALETTE hPalette = NULL; // New: Palette handle
+char szFile[260] = {0};
 int imgWidth = 0, imgHeight = 0;
 int scrollX = 0, scrollY = 0;
-int noFSdither = 0;
+int FSdither = 1;
 
 typedef struct { BYTE r, g, b; } RGB_TRIPLE;
 
@@ -445,6 +447,12 @@ BOOL SaveBitmapToFile(HBITMAP hBmp, const char* szFileName) {
     return (hFile != INVALID_HANDLE_VALUE);
 }
 
+void UpdateWindowTitle(HWND hwnd, char* filePath) {
+    char newTitle[500];
+    wsprintf(newTitle, "%s (D=%d) - %s", MAINWIN_TITLE, FSdither, *filePath ? filePath : MAINWIN_TITLE_SUFFIX);
+    SetWindowText(hwnd, newTitle);
+}
+
 int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrev, LPSTR lpCmdLine, int nCmdShow) {
     HWND hwnd;
     MSG msg;
@@ -457,7 +465,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrev, LPSTR lpCmdLine, int nC
 
     RegisterClass(&wc);
 
-    hwnd = CreateWindowEx(WS_EX_ACCEPTFILES, MAINWIN_CLASS, MAINWIN_TITLE " - Press 'O' to open file",
+    hwnd = CreateWindowEx(WS_EX_ACCEPTFILES, MAINWIN_CLASS, MAINWIN_TITLE " - " MAINWIN_TITLE_SUFFIX,
         WS_OVERLAPPEDWINDOW | WS_HSCROLL | WS_VSCROLL,
         CW_USEDEFAULT, CW_USEDEFAULT, 800, 600, NULL, NULL, hInstance, NULL);
 
@@ -468,6 +476,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrev, LPSTR lpCmdLine, int nC
     // index 0 is the EXE path, index 1 is the first argument (the file)
     if (__argc > 1) {
         LoadImageFromPath(hwnd, __argv[1]);
+        UpdateWindowTitle(hwnd, szFile);
     }
 
     while (GetMessage(&msg, NULL, 0, 0)) {
@@ -524,6 +533,9 @@ void LoadImageFromPath(HWND hwnd, char* filePath) {
         RECT r;
         int bpp, i;
 
+        // Copy filename to global
+        if(filePath != szFile) strcpy(szFile, filePath);
+
         // Detect if we should dither (e.g., if bit depth is low)
         screenHdc = GetDC(NULL);
         bpp = GetDeviceCaps(screenHdc, BITSPIXEL);
@@ -532,10 +544,15 @@ void LoadImageFromPath(HWND hwnd, char* filePath) {
         if (hBitmap) DeleteObject(hBitmap);
         if (hPalette) DeleteObject(hPalette);
 
-        if (!noFSdither && bpp <= 8) {
+        if (FSdither == 1) { // auto FS dither when target surface bpp <= 8
+            if (bpp <= 8) {
+                InitWebSafePalette();
+                ApplyDithering(data, imgWidth, imgHeight, (bpp <= 4) ? 16 : 256);
+            }
+        } else if (FSdither > 1) { // force FS dither, to 16 colors when FSdither=2, to web-safe 256 colors otherwise
             InitWebSafePalette();
-            ApplyDithering(data, imgWidth, imgHeight, (bpp <= 4) ? 16 : 256);
-        }
+            ApplyDithering(data, imgWidth, imgHeight, (FSdither == 2) ? 16 : 256);
+        } // no FS dithering when FSdither=0
 
         // 1. Create a Halftone Palette for 8-bit displays
         hdc = GetDC(hwnd);
@@ -586,17 +603,17 @@ void LoadImageFromPath(HWND hwnd, char* filePath) {
 
 void SaveFile(HWND hwnd) {
     OPENFILENAME ofn = {0};
-    char szFile[260] = "output.bmp";
+    char szSaveFile[260] = "output.bmp";
 
     ofn.lStructSize = sizeof(ofn);
     ofn.hwndOwner = hwnd;
-    ofn.lpstrFile = szFile;
+    ofn.lpstrFile = szSaveFile;
     ofn.nMaxFile = sizeof(szFile);
     ofn.lpstrFilter = "Bitmap Files (*.bmp)\0*.bmp\0";
     ofn.Flags = OFN_OVERWRITEPROMPT;
 
     if (GetSaveFileName(&ofn)) {
-        if (SaveBitmapToFile(hBitmap, szFile)) {
+        if (SaveBitmapToFile(hBitmap, szSaveFile)) {
             MessageBox(hwnd, "File saved successfully!", "Success", MB_OK);
         } else {
             MessageBox(hwnd, "Failed to save file.", "Error", MB_ICONERROR);
@@ -606,8 +623,7 @@ void SaveFile(HWND hwnd) {
 
 void OpenPicFile(HWND hwnd) {
     OPENFILENAME ofn;
-    char szFile[260] = {0};
-
+    
     ZeroMemory(&ofn, sizeof(ofn));
     ofn.lStructSize = sizeof(ofn);
     ofn.hwndOwner = hwnd;
@@ -687,11 +703,12 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam) 
 
         case WM_DROPFILES: {
             HDROP hDrop = (HDROP)wParam;
-            char szFile[MAX_PATH];
+            char szDropFile[MAX_PATH];
 
             // Get the count of dropped files (we only care about the first one)
-            if (DragQueryFile(hDrop, 0, szFile, MAX_PATH)) {
-                LoadImageFromPath(hwnd, szFile);
+            if (DragQueryFile(hDrop, 0, szDropFile, MAX_PATH)) {
+                LoadImageFromPath(hwnd, szDropFile);
+                UpdateWindowTitle(hwnd, szFile);
             }
 
             // Must release the handle allocated by the shell
@@ -732,9 +749,11 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam) 
                 // File Operations
                 case 'O':
                     OpenPicFile(hwnd);
+                    UpdateWindowTitle(hwnd, szFile);
                     break;
                 case 'D':
-                    noFSdither = !noFSdither;
+                    FSdither = FSdither == 3 ? 0 : FSdither+1;
+                    UpdateWindowTitle(hwnd, szFile);
                     break;
                 case 'S':
                     SaveFile(hwnd);

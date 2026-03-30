@@ -583,7 +583,7 @@ void LoadImageFromPath(HWND hwnd, char* filePath) {
         // 3. Prepare DIB Data
         // DIB Rows needs to be DWORD aligned
         iImgWidth = iDIBWidth = imgWidth*3;
-        while (iDIBWidth & 3) ++iDIBWidth;
+        iDIBWidth = (iDIBWidth+3) & ~3;
         pDIBData = malloc(imgHeight * iDIBWidth);
 
         // Copy row by row

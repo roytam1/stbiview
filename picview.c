@@ -520,7 +520,6 @@ void LoadImageFromPath(HWND hwnd, char* filePath) {
     int channels;
     // stb_image loads pixels as RGBA/RGB
     unsigned char *data = stbi_load(filePath, &imgWidth, &imgHeight, &channels, 3);
-
     if (!data) {
         char errBuf[MAX_PATH + 50];
         wsprintf(errBuf, "Failed to load:\n%s", filePath);
@@ -528,10 +527,11 @@ void LoadImageFromPath(HWND hwnd, char* filePath) {
         return;
     } else {
         BITMAPINFO bmi = {0};
-        void *pBits;
+        void *pBits, *pDIBData;
         HDC hdc, screenHdc;
         RECT r;
-        int bpp, i;
+        int bpp, i, iImgWidth, iDIBWidth;
+        unsigned char *p, *q;
 
         // Copy filename to global
         if(filePath != szFile) strcpy(szFile, filePath);
@@ -566,31 +566,50 @@ void LoadImageFromPath(HWND hwnd, char* filePath) {
         bmi.bmiHeader.biBitCount = 24;
         bmi.bmiHeader.biCompression = BI_RGB;
 
-        // Swizzle RGBA -> BGRA
+        // Swizzle RGB -> BGR
         for (i = 0; i < imgWidth * imgHeight * 3; i += 3) {
             unsigned char r = data[i];
             data[i] = data[i + 2];
             data[i + 2] = r;
         }
 
+        // 3. Prepare DIB Data
+        // DIB Rows needs to be DWORD aligned
+        iImgWidth = iDIBWidth = imgWidth*3;
+        while (iDIBWidth & 3) ++iDIBWidth;
+        pDIBData = malloc(imgHeight * iDIBWidth);
+
+        // Copy row by row
+        p=pDIBData;
+        q=data;
+        for (i=0; i<imgHeight; ++i) {
+            memcpy(p, q, iImgWidth);
+            p += iDIBWidth;
+            q += iImgWidth;
+        }
+
+#if 1
         // --- METHOD 1: CreateDIBSection (Modern/Efficient) ---
         hBitmap = CreateDIBSection(hdc, &bmi, DIB_RGB_COLORS, &pBits, NULL, 0);
 
         if (hBitmap && pBits) {
             // Success: Copy swizzled data to the DIB pointer
-            memcpy(pBits, data, imgWidth * imgHeight * 3);
+            memcpy(pBits, pDIBData, iDIBWidth * imgHeight);
         }
-        else {
+        else
+#endif
+        {
             // --- METHOD 2: Fallback (DDB + SetDIBits) ---
             // Create a bitmap compatible with the current display
             hBitmap = CreateCompatibleBitmap(hdc, imgWidth, imgHeight);
             if (hBitmap) {
                 // Manually push the pixel data into the bitmap handle
-                SetDIBits(hdc, hBitmap, 0, imgHeight, data, &bmi, DIB_RGB_COLORS);
+                SetDIBits(hdc, hBitmap, 0, imgHeight, pDIBData, &bmi, DIB_RGB_COLORS);
             }
         }
 
         ReleaseDC(hwnd, hdc);
+        free(pDIBData);
         stbi_image_free(data);
 
         // Reset view

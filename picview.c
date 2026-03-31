@@ -309,16 +309,19 @@ int imgWidth = 0, imgHeight = 0;
 int scrollX = 0, scrollY = 0;
 int FSdither = 1;
 BITMAPINFO bmi;
+int LUT_inited = 0;
 
 typedef struct { BYTE r, g, b; } RGB_TRIPLE;
+typedef unsigned char LUT_TYPE[32][32];
 
 // Standard 16-color VGA Palette
 RGB_TRIPLE vga16[16] = {
     {0,0,0}, {128,0,0}, {0,128,0}, {128,128,0}, {0,0,128}, {128,0,128}, {0,128,128}, {192,192,192},
     {128,128,128}, {255,0,0}, {0,255,0}, {255,255,0}, {0,0,255}, {255,0,255}, {0,255,255}, {255,255,255}
 };
-
 RGB_TRIPLE web216[216]; // The "6x6x6" color cube
+unsigned char lut16[32][32][32];
+unsigned char lut256[32][32][32];
 
 HPALETTE CreateWebSafePalette() {
     int palSize, r, g, b, i = 0;
@@ -368,51 +371,104 @@ int FindClosestColor(RGB_TRIPLE color, RGB_TRIPLE* palette, int count) {
     return closest;
 }
 
+// Run this ONCE at app startup
+void InitAllLUTs() {
+    // Precompute for VGA 16 and web-safe 216
+    int r, g, b;
+    if(LUT_inited) return;
+    for (r = 0; r < 32; r++) {
+        for (g = 0; g < 32; g++) {
+            for (b = 0; b < 32; b++) {
+                RGB_TRIPLE color = { (BYTE)(r << 3), (BYTE)(g << 3), (BYTE)(b << 3) };
+                lut16[r][g][b] = (unsigned char)FindClosestColor(color, vga16, 16);
+                lut256[r][g][b] = (unsigned char)FindClosestColor(color, web216, 216);
+            }
+        }
+    }
+    LUT_inited = 1;
+}
+
 // Floyd-Steinberg Dither Function
 void ApplyDithering(unsigned char* pixels, int width, int height, int colorCount) {
-    // Error buffer: current row and next row to save memory
-    // Layout: [red, green, blue] per pixel
+    // Error buffer stores RGB errors shifted by 4 bits for precision.
+    // Signed int is necessary to handle negative error values.
     int i, palCount, x, y;
-    RGB_TRIPLE *pal;
-    int* errorBuf = (int*)calloc(width * height * 3, sizeof(int));
+    LUT_TYPE *activeLUT;
+    RGB_TRIPLE *activePal;
+    int* errorBuf = (int*)malloc(width * height * 3 * sizeof(int));
     if (!errorBuf) return;
 
-    for (i = 0; i < width * height * 3; i++) errorBuf[i] = pixels[i] << 8;
+    // Load initial pixels into error buffer (Scale up by 16)
+    for (i = 0; i < width * height * 3; i++) {
+        errorBuf[i] = (int)pixels[i] << 4;
+    }
 
-    pal = (colorCount == 16) ? vga16 : web216;
-    palCount = (colorCount == 16) ? 16 : 216;
+    activeLUT = (colorCount == 16) ? lut16 : lut256;
+    activePal = (colorCount == 16) ? vga16 : web216;
 
     for (y = 0; y < height; y++) {
         for (x = 0; x < width; x++) {
-            RGB_TRIPLE oldP, newP;
-            int errR, errG, errB, i;
-            int dx[] = {1, -1, 0, 1}, dy[] = {0, 1, 1, 1}, w[] = {7, 3, 5, 1};
-            int pIdx, idx = (y * width + x) * 3;
+            int pIdx, idx, r, g, b;
+            int errR, errG, errB;
+            BYTE clpR, clpG, clpB;
+            RGB_TRIPLE newP;
 
-            oldP.r = (BYTE)max(0, min(255, errorBuf[idx] >> 8));
-            oldP.g = (BYTE)max(0, min(255, errorBuf[idx+1] >> 8));
-            oldP.b = (BYTE)max(0, min(255, errorBuf[idx+2] >> 8));
+            idx = (y * width + x) * 3;
 
-            pIdx = FindClosestColor(oldP, pal, palCount);
-            newP = pal[pIdx];
+            // 1. Clamping and Quantization
+            // Shift back down to 0-255 range for LUT lookup
+            r = errorBuf[idx] >> 4;
+            g = errorBuf[idx+1] >> 4;
+            b = errorBuf[idx+2] >> 4;
 
+            clpR = (r < 0) ? 0 : (r > 255) ? 255 : (BYTE)r;
+            clpG = (g < 0) ? 0 : (g > 255) ? 255 : (BYTE)g;
+            clpB = (b < 0) ? 0 : (b > 255) ? 255 : (BYTE)b;
+
+            // 2. Fast LUT Lookup (No distance math!)
+            pIdx = activeLUT[clpR >> 3][clpG >> 3][clpB >> 3];
+            newP = activePal[pIdx];
+
+            // 3. Store Final Pixel
             pixels[idx]   = newP.r;
             pixels[idx+1] = newP.g;
             pixels[idx+2] = newP.b;
 
-            errR = errorBuf[idx]   - (newP.r << 8);
-            errG = errorBuf[idx+1] - (newP.g << 8);
-            errB = errorBuf[idx+2] - (newP.b << 8);
+            // 4. Calculate Error (Residual)
+            // Error is in the "Shifted" domain
+            errR = errorBuf[idx]   - (newP.r << 4);
+            errG = errorBuf[idx+1] - (newP.g << 4);
+            errB = errorBuf[idx+2] - (newP.b << 4);
 
-            // Diffusion: 7/16 right, 3/16 down-left, 5/16 down, 1/16 down-right
-            // We use bit shifts for speed: (err * 7) >> 4 is approx err * (7/16)
-            for (i = 0; i < 4; i++) {
-                int nx = x + dx[i], ny = y + dy[i];
-                if (nx >= 0 && nx < width && ny < height) {
-                    int nIdx = (ny * width + nx) * 3;
-                    errorBuf[nIdx]   += (errR * w[i]) >> 4;
-                    errorBuf[nIdx+1] += (errG * w[i]) >> 4;
-                    errorBuf[nIdx+2] += (errB * w[i]) >> 4;
+            // 5. Error Diffusion (Floyd-Steinberg Weights)
+            // We use integer weights: 7/16, 3/16, 5/16, 1/16
+
+            // Pixel to the Right (7/16)
+            if (x + 1 < width) {
+                errorBuf[idx + 3] += (errR * 7) >> 4;
+                errorBuf[idx + 4] += (errG * 7) >> 4;
+                errorBuf[idx + 5] += (errB * 7) >> 4;
+            }
+
+            if (y + 1 < height) {
+                int rowNext = idx + (width * 3);
+
+                // Down-Left (3/16)
+                if (x > 0) {
+                    errorBuf[rowNext - 3] += (errR * 3) >> 4;
+                    errorBuf[rowNext - 2] += (errG * 3) >> 4;
+                    errorBuf[rowNext - 1] += (errB * 3) >> 4;
+                }
+                // Down (5/16)
+                errorBuf[rowNext]     += (errR * 5) >> 4;
+                errorBuf[rowNext + 1] += (errG * 5) >> 4;
+                errorBuf[rowNext + 2] += (errB * 5) >> 4;
+
+                // Down-Right (1/16)
+                if (x + 1 < width) {
+                    errorBuf[rowNext + 3] += errR >> 4;
+                    errorBuf[rowNext + 4] += errG >> 4;
+                    errorBuf[rowNext + 5] += errB >> 4;
                 }
             }
         }
@@ -459,7 +515,7 @@ BOOL SaveRawBufferToBMP(const char* szFileName) {
 
     // 4. Write Pixel Data
     // New, simplified version for Bottom-Up buffer
-    for (int y = 0; y < imgHeight; y++) {
+    for (y = 0; y < imgHeight; y++) {
         unsigned char* pRow = pRawData + (y * stride);
         WriteFile(hFile, pRow, stride, &dwWritten, NULL);
     }
@@ -574,14 +630,16 @@ void LoadImageFromPath(HWND hwnd, char* filePath) {
     if (FSdither == 1) { // auto FS dither when target surface bpp <= 8
         if (bpp <= 8) {
             UpdateWindowTitle(hwnd, "Dithering...");
-            if (hPalette) DeleteObject(hPalette);
-            hPalette = CreateWebSafePalette();
+            if (!hPalette)
+                hPalette = CreateWebSafePalette();
+            InitAllLUTs();
             ApplyDithering(pSrc, imgW, imgH, (bpp <= 4) ? 16 : 216);
         }
     } else if (FSdither > 1) { // force FS dither, to 16 colors when FSdither=2, to web-safe 256 colors otherwise
         UpdateWindowTitle(hwnd, "Dithering...");
-        if (hPalette) DeleteObject(hPalette);
-        hPalette = CreateWebSafePalette();
+        if (!hPalette)
+            hPalette = CreateWebSafePalette();
+        InitAllLUTs();
         ApplyDithering(pSrc, imgW, imgH, (FSdither == 2) ? 16 : 216);
     } // no FS dithering when FSdither=0
 

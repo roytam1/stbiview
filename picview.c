@@ -546,6 +546,7 @@ void LoadImageFromPath(HWND hwnd, char* filePath) {
     HDC hdcScreen;
     char errBuf[MAX_PATH + 50];
 
+    UpdateWindowTitle(hwnd, "Loading...");
     // 1. Load raw packed RGB data from stb_image
     pSrc = stbi_load(filePath, &imgW, &imgH, &channels, 3);
     if (!pSrc) {
@@ -575,17 +576,20 @@ void LoadImageFromPath(HWND hwnd, char* filePath) {
 
     if (FSdither == 1) { // auto FS dither when target surface bpp <= 8
         if (bpp <= 8) {
+            UpdateWindowTitle(hwnd, "Dithering...");
             if (hPalette) DeleteObject(hPalette);
             hPalette = CreateWebSafePalette();
             ApplyDithering(pSrc, imgW, imgH, (bpp <= 4) ? 16 : 216);
         }
     } else if (FSdither > 1) { // force FS dither, to 16 colors when FSdither=2, to web-safe 256 colors otherwise
+        UpdateWindowTitle(hwnd, "Dithering...");
         if (hPalette) DeleteObject(hPalette);
         hPalette = CreateWebSafePalette();
         ApplyDithering(pSrc, imgW, imgH, (FSdither == 2) ? 16 : 216);
     } // no FS dithering when FSdither=0
 
     // 4. SINGLE-PASS: Swizzle + Padded + Flip to Bottom-Up
+    UpdateWindowTitle(hwnd, "Rendering...");
     for (y = 0; y < imgH; y++) {
         unsigned char *pSrcRow, *pDestRow;
         pSrcRow = &pSrc[y * imgW * 3];
@@ -621,6 +625,9 @@ void LoadImageFromPath(HWND hwnd, char* filePath) {
 
     stbi_image_free(pSrc); // Free the original stb_image buffer
     
+    // Copy filename to global
+    if(filePath != szFile) strcpy(szFile, filePath);
+
     // 7. Refresh UI
     scrollX = 0; scrollY = 0;
     UpdateScrollbars(hwnd);

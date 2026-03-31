@@ -457,12 +457,9 @@ BOOL SaveRawBufferToBMP(const char* szFileName) {
     WriteFile(hFile, &bfh, sizeof(bfh), &dwWritten, NULL);
     WriteFile(hFile, &bih, sizeof(bih), &dwWritten, NULL);
 
-    /* 4. Write Pixel Data
-       IMPORTANT: Our internal pRawData is 'Top-Down' (bmi.biHeight was -imgH).
-       Standard BMP files are 'Bottom-Up'. 
-       We must write the rows in reverse order to the file.
-    */
-    for (y = imgHeight - 1; y >= 0; y--) {
+    // 4. Write Pixel Data
+    // New, simplified version for Bottom-Up buffer
+    for (int y = 0; y < imgHeight; y++) {
         unsigned char* pRow = pRawData + (y * stride);
         WriteFile(hFile, pRow, stride, &dwWritten, NULL);
     }

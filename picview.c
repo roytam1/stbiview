@@ -596,7 +596,7 @@ void LoadImageFromPath(HWND hwnd, char* filePath) {
             q += iImgWidth;
         }
 
-#if 1
+#ifndef NO_DIB_SECTION
         // --- METHOD 1: CreateDIBSection (Modern/Efficient) ---
         hBitmap = CreateDIBSection(hdc, &bmi, DIB_RGB_COLORS, &pBits, NULL, 0);
 

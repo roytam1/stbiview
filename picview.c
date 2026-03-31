@@ -301,12 +301,14 @@ LRESULT CALLBACK WindowProc(HWND, UINT, WPARAM, LPARAM);
 void LoadImageFromPath(HWND hwnd, char* filePath);
 void OpenPicFile(HWND hwnd);
 
-HBITMAP hBitmap = NULL;
+/* Global State */
 HPALETTE hPalette = NULL; // New: Palette handle
+unsigned char* pRawData = NULL; // Raw RGB pixel data
 char szFile[260] = {0};
 int imgWidth = 0, imgHeight = 0;
 int scrollX = 0, scrollY = 0;
 int FSdither = 1;
+BITMAPINFO bmi;
 
 typedef struct { BYTE r, g, b; } RGB_TRIPLE;
 
@@ -318,16 +320,34 @@ RGB_TRIPLE vga16[16] = {
 
 RGB_TRIPLE web216[216]; // The "6x6x6" color cube
 
-void InitWebSafePalette() {
-    int r, g, b, i = 0;
+HPALETTE CreateWebSafePalette() {
+    int palSize, r, g, b, i = 0;
+    LOGPALETTE* plp;
+    HPALETTE hPal;
+
+    // 216 colors for the 6x6x6 cube + 20 system colors = 236
+    // We'll just create the 216 logical entries
+    palSize = sizeof(LOGPALETTE) + (216 * sizeof(PALETTEENTRY));
+    plp = (LOGPALETTE*)malloc(palSize);
+    
+    plp->palVersion = 0x300; // Windows 3.0+
+    plp->palNumEntries = 216;
     for (r = 0; r < 6; r++)
         for (g = 0; g < 6; g++)
             for (b = 0; b < 6; b++) {
+                plp->palPalEntry[i].peRed   = r * 51;
+                plp->palPalEntry[i].peGreen = g * 51;
+                plp->palPalEntry[i].peBlue  = b * 51;
+                plp->palPalEntry[i].peFlags = 0;
                 web216[i].r = r * 51;
                 web216[i].g = g * 51;
                 web216[i].b = b * 51;
                 i++;
             }
+
+    hPal = CreatePalette(plp);
+    free(plp);
+    return hPal;
 }
 
 // Helper: Find closest color in a palette
@@ -400,59 +420,55 @@ void ApplyDithering(unsigned char* pixels, int width, int height, int colorCount
     free(errorBuf);
 }
 
-BOOL SaveBitmapToFile(HBITMAP hBmp, const char* szFileName) {
-    BITMAP bmp;
-    BITMAPINFOHEADER bi = {0};
-    BITMAPFILEHEADER bfh = {0};
-    DWORD dwRowSize, dwDataSize;
-    BYTE* pBits;
-    HDC hdc;
+BOOL SaveRawBufferToBMP(const char* szFileName) {
+    // 1. Prepare Headers
+    BITMAPFILEHEADER bfh;
+    BITMAPINFOHEADER bih;
+    int stride, y;
+    DWORD dwDataSize, dwWritten;
     HANDLE hFile;
 
-    if (!hBmp) return FALSE;
+    if (!pRawData) return FALSE;
 
-    GetObject(hBmp, sizeof(BITMAP), &bmp);
+    // Calculate the stride (how many bytes per row in our GDI-compatible buffer)
+    stride = ((imgWidth * 24 + 31) / 32) * 4;
+    dwDataSize = (DWORD)stride * imgHeight;
 
-    bi.biSize = sizeof(BITMAPINFOHEADER);
-    bi.biWidth = bmp.bmWidth;
-    bi.biHeight = bmp.bmHeight; // Positive for bottom-up (standard BMP)
-    bi.biPlanes = 1;
-    bi.biBitCount = 24; // Saving as 24-bit RGB
-    bi.biCompression = BI_RGB;
-
-    // Calculate row size (must be DWORD aligned)
-    dwRowSize = bmp.bmWidth*3;
-    dwRowSize = (dwRowSize+3) & ~3;
-    dwDataSize = dwRowSize * bmp.bmHeight;
-
-    // Allocate memory for pixels
-    pBits = (BYTE*)malloc(dwDataSize);
-    if (!pBits) return FALSE;
-
-    hdc = GetDC(NULL);
-    // Retrieve the bits from the handle into our buffer
-    GetDIBits(hdc, hBmp, 0, bmp.bmHeight, pBits, (BITMAPINFO*)&bi, DIB_RGB_COLORS);
-    ReleaseDC(NULL, hdc);
-
-    // Setup File Header
+    memset(&bfh, 0, sizeof(bfh));
     bfh.bfType = 0x4D42; // "BM"
     bfh.bfOffBits = sizeof(BITMAPFILEHEADER) + sizeof(BITMAPINFOHEADER);
     bfh.bfSize = bfh.bfOffBits + dwDataSize;
 
-    // Write to Disk
-    hFile = CreateFile(szFileName, GENERIC_WRITE, 0, NULL, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
-    if (hFile != INVALID_HANDLE_VALUE) {
-        DWORD dwWritten;
-        WriteFile(hFile, &bfh, sizeof(bfh), &dwWritten, NULL);
-        WriteFile(hFile, &bi, sizeof(bi), &dwWritten, NULL);
-        WriteFile(hFile, &dwWritten, dwDataSize, &dwWritten, NULL); // Note: Fix variable to pBits
-        // Correction for WriteFile call:
-        WriteFile(hFile, pBits, dwDataSize, &dwWritten, NULL);
-        CloseHandle(hFile);
+    memset(&bih, 0, sizeof(bih));
+    bih.biSize = sizeof(BITMAPINFOHEADER);
+    bih.biWidth = imgWidth;
+    bih.biHeight = imgHeight; // Use positive for standard bottom-up BMP file
+    bih.biPlanes = 1;
+    bih.biBitCount = 24;
+    bih.biCompression = BI_RGB;
+
+    // 2. Open File
+    hFile = CreateFile(szFileName, GENERIC_WRITE, 0, NULL, 
+                              CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
+    
+    if (hFile == INVALID_HANDLE_VALUE) return FALSE;
+
+    // 3. Write Headers
+    WriteFile(hFile, &bfh, sizeof(bfh), &dwWritten, NULL);
+    WriteFile(hFile, &bih, sizeof(bih), &dwWritten, NULL);
+
+    /* 4. Write Pixel Data
+       IMPORTANT: Our internal pRawData is 'Top-Down' (bmi.biHeight was -imgH).
+       Standard BMP files are 'Bottom-Up'. 
+       We must write the rows in reverse order to the file.
+    */
+    for (y = imgHeight - 1; y >= 0; y--) {
+        unsigned char* pRow = pRawData + (y * stride);
+        WriteFile(hFile, pRow, stride, &dwWritten, NULL);
     }
 
-    free(pBits);
-    return (hFile != INVALID_HANDLE_VALUE);
+    CloseHandle(hFile);
+    return TRUE;
 }
 
 void UpdateWindowTitle(HWND hwnd, char* filePath) {
@@ -525,107 +541,88 @@ void UpdateScrollbars(HWND hwnd) {
 }
 
 void LoadImageFromPath(HWND hwnd, char* filePath) {
-    int channels;
-    // stb_image loads pixels as RGBA/RGB
-    unsigned char *data = stbi_load(filePath, &imgWidth, &imgHeight, &channels, 3);
-    if (!data) {
-        char errBuf[MAX_PATH + 50];
+    int imgW, imgH, channels, bpp, stride, x, y;
+    unsigned char *pSrc, *pDest;
+    HDC hdcScreen;
+    char errBuf[MAX_PATH + 50];
+
+    // 1. Load raw packed RGB data from stb_image
+    pSrc = stbi_load(filePath, &imgW, &imgH, &channels, 3);
+    if (!pSrc) {
         wsprintf(errBuf, "Failed to load:\n%s", filePath);
         MessageBox(hwnd, errBuf, "Error", MB_ICONERROR);
         return;
-    } else {
-        BITMAPINFO bmi = {0};
-        void *pBits, *pDIBData;
-        HDC hdc, screenHdc;
-        RECT r;
-        int bpp, i, iImgWidth, iDIBWidth;
-        unsigned char *p, *q;
-
-        // Copy filename to global
-        if(filePath != szFile) strcpy(szFile, filePath);
-
-        // Detect if we should dither (e.g., if bit depth is low)
-        screenHdc = GetDC(NULL);
-        bpp = GetDeviceCaps(screenHdc, BITSPIXEL);
-        ReleaseDC(NULL, screenHdc);
-
-        if (hBitmap) DeleteObject(hBitmap);
-        if (hPalette) DeleteObject(hPalette);
-
-        if (FSdither == 1) { // auto FS dither when target surface bpp <= 8
-            if (bpp <= 8) {
-                InitWebSafePalette();
-                ApplyDithering(data, imgWidth, imgHeight, (bpp <= 4) ? 16 : 256);
-            }
-        } else if (FSdither > 1) { // force FS dither, to 16 colors when FSdither=2, to web-safe 256 colors otherwise
-            InitWebSafePalette();
-            ApplyDithering(data, imgWidth, imgHeight, (FSdither == 2) ? 16 : 256);
-        } // no FS dithering when FSdither=0
-
-        // 1. Create a Halftone Palette for 8-bit displays
-        hdc = GetDC(hwnd);
-        hPalette = CreateHalftonePalette(hdc);
-
-        // 2. Prepare Bitmap Info
-        bmi.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
-        bmi.bmiHeader.biWidth = imgWidth;
-        bmi.bmiHeader.biHeight = -imgHeight;
-        bmi.bmiHeader.biPlanes = 1;
-        bmi.bmiHeader.biBitCount = 24;
-        bmi.bmiHeader.biCompression = BI_RGB;
-
-        // Swizzle RGB -> BGR
-        for (i = 0; i < imgWidth * imgHeight * 3; i += 3) {
-            unsigned char r = data[i];
-            data[i] = data[i + 2];
-            data[i + 2] = r;
-        }
-
-        // 3. Prepare DIB Data
-        // DIB Rows needs to be DWORD aligned
-        iImgWidth = iDIBWidth = imgWidth*3;
-        iDIBWidth = (iDIBWidth+3) & ~3;
-        pDIBData = malloc(imgHeight * iDIBWidth);
-
-        // Copy row by row
-        p=pDIBData;
-        q=data;
-        for (i=0; i<imgHeight; ++i) {
-            memcpy(p, q, iImgWidth);
-            p += iDIBWidth;
-            q += iImgWidth;
-        }
-
-#ifndef NO_DIB_SECTION
-        // --- METHOD 1: CreateDIBSection (Modern/Efficient) ---
-        hBitmap = CreateDIBSection(hdc, &bmi, DIB_RGB_COLORS, &pBits, NULL, 0);
-
-        if (hBitmap && pBits) {
-            // Success: Copy swizzled data to the DIB pointer
-            memcpy(pBits, pDIBData, iDIBWidth * imgHeight);
-        }
-        else
-#endif
-        {
-            // --- METHOD 2: Fallback (DDB + SetDIBits) ---
-            // Create a bitmap compatible with the current display
-            hBitmap = CreateCompatibleBitmap(hdc, imgWidth, imgHeight);
-            if (hBitmap) {
-                // Manually push the pixel data into the bitmap handle
-                SetDIBits(hdc, hBitmap, 0, imgHeight, pDIBData, &bmi, DIB_RGB_COLORS);
-            }
-        }
-
-        ReleaseDC(hwnd, hdc);
-        free(pDIBData);
-        stbi_image_free(data);
-
-        // Reset view
-        scrollX = 0; scrollY = 0;
-        GetClientRect(hwnd, &r);
-        SendMessage(hwnd, WM_SIZE, 0, MAKELPARAM(r.right, r.bottom));
-        InvalidateRect(hwnd, NULL, TRUE);
     }
+    // 2. Calculate GDI Stride (DWORD Aligned)
+    // Formula: ((Width * BitsPerPixel + 31) / 32) * 4
+    stride = ((imgW * 24 + 31) / 32) * 4;
+    
+    // Allocate the destination buffer for GDI
+    pDest = (unsigned char*)malloc(stride * imgH);
+    if (!pDest) {
+        stbi_image_free(pSrc);
+        MessageBox(hwnd, "Out of memory", "Error", MB_ICONERROR);
+        return;
+    }
+
+    // 3. Optional: Apply Dithering on the source buffer first
+    // (Use the ApplyDithering function from our previous steps here)
+
+    // Detect if we should dither (e.g., if bit depth is low)
+    hdcScreen = GetDC(NULL);
+    bpp = GetDeviceCaps(hdcScreen, BITSPIXEL);
+    ReleaseDC(NULL, hdcScreen);
+
+    if (FSdither == 1) { // auto FS dither when target surface bpp <= 8
+        if (bpp <= 8) {
+            if (hPalette) DeleteObject(hPalette);
+            hPalette = CreateWebSafePalette();
+            ApplyDithering(pSrc, imgW, imgH, (bpp <= 4) ? 16 : 216);
+        }
+    } else if (FSdither > 1) { // force FS dither, to 16 colors when FSdither=2, to web-safe 256 colors otherwise
+        if (hPalette) DeleteObject(hPalette);
+        hPalette = CreateWebSafePalette();
+        ApplyDithering(pSrc, imgW, imgH, (FSdither == 2) ? 16 : 216);
+    } // no FS dithering when FSdither=0
+
+    // 4. Single-Pass: Swizzle + Pad
+    for (y = 0; y < imgH; y++) {
+        unsigned char *pSrcRow, *pDestRow;
+        pSrcRow = &pSrc[y * imgW * 3];
+        pDestRow = &pDest[y * stride];
+
+        for (x = 0; x < imgW; x++) {
+            // Swizzle RGB to BGR while moving to the padded buffer
+            pDestRow[x * 3 + 0] = pSrcRow[x * 3 + 2]; // Blue
+            pDestRow[x * 3 + 1] = pSrcRow[x * 3 + 1]; // Green
+            pDestRow[x * 3 + 2] = pSrcRow[x * 3 + 0]; // Red
+        }
+        
+        // Note: The "extra" bytes at the end of pDestRow (the padding) 
+        // don't need to be initialized; GDI simply ignores them.
+    }
+
+    // 5. Update Global State for Rendering
+    if (pRawData) free(pRawData); // Free previous image buffer
+    pRawData = pDest;             // Point to our new GDI-compatible buffer
+    imgWidth = imgW;
+    imgHeight = imgH;
+
+    // 6. Update BITMAPINFO for StretchDIBits
+    memset(&bmi, 0, sizeof(bmi));
+    bmi.bmiHeader.biSize        = sizeof(BITMAPINFOHEADER);
+    bmi.bmiHeader.biWidth       = imgW;
+    bmi.bmiHeader.biHeight      = -imgH; // Top-down for correct orientation
+    bmi.bmiHeader.biPlanes      = 1;
+    bmi.bmiHeader.biBitCount    = 24;
+    bmi.bmiHeader.biCompression = BI_RGB;
+
+    stbi_image_free(pSrc); // Free the original stb_image buffer
+    
+    // 7. Refresh UI
+    scrollX = 0; scrollY = 0;
+    UpdateScrollbars(hwnd);
+    InvalidateRect(hwnd, NULL, TRUE);
 }
 
 void SaveFile(HWND hwnd) {
@@ -640,7 +637,7 @@ void SaveFile(HWND hwnd) {
     ofn.Flags = OFN_OVERWRITEPROMPT;
 
     if (GetSaveFileName(&ofn)) {
-        if (SaveBitmapToFile(hBitmap, szSaveFile)) {
+        if (SaveRawBufferToBMP(szSaveFile)) {
             MessageBox(hwnd, "File saved successfully!", "Success", MB_OK);
         } else {
             MessageBox(hwnd, "Failed to save file.", "Error", MB_ICONERROR);
@@ -668,57 +665,52 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam) 
     switch (uMsg) {
         case WM_QUERYNEWPALETTE:
             if (hPalette) {
-                UINT updated;
+                UINT u;
                 HDC hdc = GetDC(hwnd);
+                // Select our palette into the DC
                 SelectPalette(hdc, hPalette, FALSE);
-                updated = RealizePalette(hdc);
+                // Map the logical palette to the physical system palette
+                u = RealizePalette(hdc);
                 ReleaseDC(hwnd, hdc);
-                if (updated > 0) InvalidateRect(hwnd, NULL, TRUE);
-                return TRUE;
+                
+                if (u > 0) {
+                    // If any colors changed, redraw the whole window
+                    InvalidateRect(hwnd, NULL, TRUE);
+                    return TRUE; // We handled it
+                }
             }
             return FALSE;
 
         case WM_PALETTECHANGED:
+            // If another window changed the palette, and it wasn't us...
             if (hPalette && (HWND)wParam != hwnd) {
                 HDC hdc = GetDC(hwnd);
                 SelectPalette(hdc, hPalette, FALSE);
                 RealizePalette(hdc);
                 ReleaseDC(hwnd, hdc);
+                // Update immediately to show background-friendly colors
                 UpdateWindow(hwnd);
             }
             return 0;
 
         case WM_PAINT: {
             PAINTSTRUCT ps;
+            RECT rc;
             HDC hdc = BeginPaint(hwnd, &ps);
-            if (hBitmap) {
-                HDC hdcMem;
-
-                hdcMem = CreateCompatibleDC(hdc);
-                SelectObject(hdcMem, hBitmap);
-
-                // IMPORTANT: Select and Realize Palette in the Paint DC
+            if (pRawData) {
+                // IMPORTANT: You must select/realize before every draw call
                 if (hPalette) {
                     SelectPalette(hdc, hPalette, FALSE);
                     RealizePalette(hdc);
-                    SelectPalette(hdcMem, hPalette, FALSE);
-                    RealizePalette(hdcMem);
                 }
 
-#if 1
-                // Set scaling mode for better quality
-                SetStretchBltMode(hdc, HALFTONE);
-                // Requirement for HALFTONE: Set brush origin
-                SetBrushOrgEx(hdc, 0, 0, NULL);
-#else
-                // Use SetStretchBltMode for better quality in 8-bit
+                GetClientRect(hwnd, &rc);
                 SetStretchBltMode(hdc, COLORONCOLOR);
-#endif
 
-                StretchBlt(hdc, 0, 0, ps.rcPaint.right, ps.rcPaint.bottom, 
-                       hdcMem, scrollX, scrollY, ps.rcPaint.right, ps.rcPaint.bottom, SRCCOPY);
-                
-                DeleteDC(hdcMem);
+                StretchDIBits(hdc, 0, 0, rc.right, rc.bottom,
+                    scrollX, scrollY,
+                    rc.right, rc.bottom,
+                    pRawData, &bmi, DIB_RGB_COLORS, SRCCOPY);
             }
             EndPaint(hwnd, &ps);
             return 0;
@@ -837,7 +829,8 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam) 
         }
 
         case WM_DESTROY:
-            if (hBitmap) DeleteObject(hBitmap);
+            if (hPalette) DeleteObject(hPalette);
+            if (pRawData) free(pRawData);
             PostQuitMessage(0);
             return 0;
     }

@@ -585,19 +585,21 @@ void LoadImageFromPath(HWND hwnd, char* filePath) {
         ApplyDithering(pSrc, imgW, imgH, (FSdither == 2) ? 16 : 216);
     } // no FS dithering when FSdither=0
 
-    // 4. Single-Pass: Swizzle + Pad
+    // 4. SINGLE-PASS: Swizzle + Padded + Flip to Bottom-Up
     for (y = 0; y < imgH; y++) {
         unsigned char *pSrcRow, *pDestRow;
         pSrcRow = &pSrc[y * imgW * 3];
-        pDestRow = &pDest[y * stride];
+        
+        // Target the rows in reverse order: 
+        // When y=0 (top of image), we write to the very last row of pDest.
+        pDestRow = &pDest[(imgH - 1 - y) * stride];
 
         for (x = 0; x < imgW; x++) {
-            // Swizzle RGB to BGR while moving to the padded buffer
             pDestRow[x * 3 + 0] = pSrcRow[x * 3 + 2]; // Blue
             pDestRow[x * 3 + 1] = pSrcRow[x * 3 + 1]; // Green
             pDestRow[x * 3 + 2] = pSrcRow[x * 3 + 0]; // Red
         }
-        
+
         // Note: The "extra" bytes at the end of pDestRow (the padding) 
         // don't need to be initialized; GDI simply ignores them.
     }
@@ -612,7 +614,7 @@ void LoadImageFromPath(HWND hwnd, char* filePath) {
     memset(&bmi, 0, sizeof(bmi));
     bmi.bmiHeader.biSize        = sizeof(BITMAPINFOHEADER);
     bmi.bmiHeader.biWidth       = imgW;
-    bmi.bmiHeader.biHeight      = -imgH; // Top-down for correct orientation
+    bmi.bmiHeader.biHeight      = imgH; // POSITIVE value = Bottom-Up (Win32s friendly)
     bmi.bmiHeader.biPlanes      = 1;
     bmi.bmiHeader.biBitCount    = 24;
     bmi.bmiHeader.biCompression = BI_RGB;
@@ -696,6 +698,7 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam) 
         case WM_PAINT: {
             PAINTSTRUCT ps;
             RECT rc;
+            int srcH, srcY;
             HDC hdc = BeginPaint(hwnd, &ps);
             if (pRawData) {
                 // IMPORTANT: You must select/realize before every draw call
@@ -707,9 +710,13 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam) 
                 GetClientRect(hwnd, &rc);
                 SetStretchBltMode(hdc, COLORONCOLOR);
 
-                StretchDIBits(hdc, 0, 0, rc.right, rc.bottom,
-                    scrollX, scrollY,
-                    rc.right, rc.bottom,
+                srcH = rc.bottom;
+                srcY = imgHeight - scrollY - srcH;
+
+                StretchDIBits(hdc, 
+                    0, 0, rc.right, rc.bottom,
+                    scrollX, srcY, 
+                    rc.right, srcH,
                     pRawData, &bmi, DIB_RGB_COLORS, SRCCOPY);
             }
             EndPaint(hwnd, &ps);

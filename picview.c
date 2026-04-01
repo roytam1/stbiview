@@ -19,6 +19,9 @@
 #define SIMPLEWEBP_IMPLEMENTATION
 #include "simplewebp.h"
 
+#define DR_PCX_IMPLEMENTATION
+#include "dr_pcx.h"
+
 /* MyVerInfo from GreenPad */
 /* MYVERINFO defination */
 #pragma pack(push,1)
@@ -602,7 +605,7 @@ void LoadImageFromPath(HWND hwnd, char* filePath) {
     char *fileExt;
     HDC hdcScreen;
     simplewebp *swebp;
-    int isWebp = 0, swRet;
+    int isWebp = 0, isPCX = 0, swRet;
     char errBuf[MAX_PATH + 50];
 
     UpdateWindowTitle(hwnd, "Loading...");
@@ -643,6 +646,10 @@ void LoadImageFromPath(HWND hwnd, char* filePath) {
             }
         }
         simplewebp_unload(swebp);
+    }
+    else if(fileExt && stricmp(fileExt,".pcx") == 0) {
+        isPCX = 1;
+        pSrc = drpcx_load_file(filePath, DRPCX_FALSE, &imgW, &imgH, &channels, 3);
     }
     else
     {
@@ -727,6 +734,7 @@ void LoadImageFromPath(HWND hwnd, char* filePath) {
     bmi.bmiHeader.biCompression = BI_RGB;
 
     if(isWebp) free(pSrc);
+    else if(isPCX) drpcx_free(pSrc);
     else stbi_image_free(pSrc); // Free the original stb_image buffer
 
     // Copy filename to global
@@ -766,7 +774,7 @@ void OpenPicFile(HWND hwnd) {
     ofn.hwndOwner = hwnd;
     ofn.lpstrFile = szFile;
     ofn.nMaxFile = sizeof(szFile);
-    ofn.lpstrFilter = "Images\0*.jpg;*.png;*.gif;*.bmp;*.tga;*.pnm;*.ppm;*.pgm;*.webp;*.web;*.wbp\0All Files\0*.*\0";
+    ofn.lpstrFilter = "Images\0*.jpg;*.png;*.gif;*.bmp;*.tga;*.pnm;*.ppm;*.pgm;*.webp;*.web;*.wbp;*.pcx\0All Files\0*.*\0";
     ofn.Flags = OFN_PATHMUSTEXIST | OFN_FILEMUSTEXIST;
 
     if (GetOpenFileName(&ofn)) {

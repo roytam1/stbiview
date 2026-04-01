@@ -16,6 +16,9 @@
 #define STBI_NO_SIMD
 #include "stb_image.h"
 
+#define SIMPLEWEBP_IMPLEMENTATION
+#include "simplewebp.h"
+
 /* MyVerInfo from GreenPad */
 /* MYVERINFO defination */
 #pragma pack(push,1)
@@ -596,12 +599,57 @@ void UpdateScrollbars(HWND hwnd) {
 void LoadImageFromPath(HWND hwnd, char* filePath) {
     int imgW, imgH, channels, bpp, stride, x, y;
     unsigned char *pSrc, *pDest;
+    char *fileExt;
     HDC hdcScreen;
+    simplewebp *swebp;
+    int isWebp = 0, swRet;
     char errBuf[MAX_PATH + 50];
 
     UpdateWindowTitle(hwnd, "Loading...");
-    // 1. Load raw packed RGB data from stb_image
-    pSrc = stbi_load(filePath, &imgW, &imgH, &channels, 3);
+
+    fileExt = strrchr(filePath, '.');
+
+    if(fileExt &&
+        (stricmp(fileExt,".webp") == 0 ||
+         stricmp(fileExt,".wbp") == 0 || // proposed 3-letter extension for webp
+         stricmp(fileExt,".web") == 0)) { // truncated 3-letter extension for webp
+        isWebp = 1;
+        // Try to load with simplewebp
+        swRet = simplewebp_load_from_filename(filePath, NULL, &swebp);
+        if (swRet == SIMPLEWEBP_NO_ERROR) {
+            // Get image dimensions from webp
+            simplewebp_get_dimensions(swebp, &imgW, &imgH);
+
+            // Allocate memory for simplewebp output buffer (in RGBA form)
+            pSrc = malloc(imgW * imgH * 4);
+            if (!pSrc) {
+                simplewebp_unload(swebp);
+                MessageBox(hwnd, "Out of memory", "Error", MB_ICONERROR);
+                return;
+            }
+
+            // decode webp with simplewebp
+            swRet = simplewebp_decode(swebp, pSrc, NULL);
+            if (swRet == SIMPLEWEBP_NO_ERROR) {
+                /* transform rgba to rgb in-place */
+                for(x=0; x < imgW*imgH; x++) {
+                    pSrc[x * 3 + 0] = pSrc[x * 4 + 0];
+                    pSrc[x * 3 + 1] = pSrc[x * 4 + 1];
+                    pSrc[x * 3 + 2] = pSrc[x * 4 + 2];
+                }
+            } else {
+                free(pSrc);
+                pSrc = NULL;
+            }
+        }
+        simplewebp_unload(swebp);
+    }
+    else
+    {
+        // 1. Load raw packed RGB data from stb_image
+        pSrc = stbi_load(filePath, &imgW, &imgH, &channels, 3);
+    }
+
     if (!pSrc) {
         wsprintf(errBuf, "Failed to load:\n%s", filePath);
         MessageBox(hwnd, errBuf, "Error", MB_ICONERROR);
@@ -678,8 +726,9 @@ void LoadImageFromPath(HWND hwnd, char* filePath) {
     bmi.bmiHeader.biBitCount    = 24;
     bmi.bmiHeader.biCompression = BI_RGB;
 
-    stbi_image_free(pSrc); // Free the original stb_image buffer
-    
+    if(isWebp) free(pSrc);
+    else stbi_image_free(pSrc); // Free the original stb_image buffer
+
     // Copy filename to global
     if(filePath != szFile) strcpy(szFile, filePath);
 

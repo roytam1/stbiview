@@ -616,18 +616,18 @@ void LoadImageFromPath(HWND hwnd, char* filePath) {
         (stricmp(fileExt,".webp") == 0 ||
          stricmp(fileExt,".wbp") == 0 || // proposed 3-letter extension for webp
          stricmp(fileExt,".web") == 0)) { // truncated 3-letter extension for webp
-        isWebp = 1;
         // Try to load with simplewebp
         swRet = simplewebp_load_from_filename(filePath, NULL, &swebp);
         if (swRet == SIMPLEWEBP_NO_ERROR) {
+            isWebp = 1;
             // Get image dimensions from webp
             simplewebp_get_dimensions(swebp, &imgW, &imgH);
 
             // Allocate memory for simplewebp output buffer (in RGBA form)
             pSrc = malloc(imgW * imgH * 4);
             if (!pSrc) {
-                simplewebp_unload(swebp);
-                MessageBox(hwnd, "Out of memory", "Error", MB_ICONERROR);
+                if(swebp) simplewebp_unload(swebp);
+                MessageBox(hwnd, "Out of memory (webp)", "Error", MB_ICONERROR);
                 return;
             }
 
@@ -645,19 +645,22 @@ void LoadImageFromPath(HWND hwnd, char* filePath) {
                 pSrc = NULL;
             }
         }
-        simplewebp_unload(swebp);
+        if(swebp) simplewebp_unload(swebp);
+        if(swRet == SIMPLEWEBP_NOT_WEBP_ERROR) goto TrySTB;
     }
-    else if(fileExt && stricmp(fileExt,".pcx") == 0) {
+    else
+    if(fileExt && stricmp(fileExt,".pcx") == 0) {
         isPCX = 1;
         pSrc = drpcx_load_file(filePath, DRPCX_FALSE, &imgW, &imgH, &channels, 3);
     }
     else
     {
+TrySTB:
         // 1. Load raw packed RGB data from stb_image
         pSrc = stbi_load(filePath, &imgW, &imgH, &channels, 3);
     }
 
-    if (!pSrc) {
+    if (!pSrc || !imgW || !imgH) {
         wsprintf(errBuf, "Failed to load:\n%s", filePath);
         MessageBox(hwnd, errBuf, "Error", MB_ICONERROR);
         return;
@@ -669,7 +672,7 @@ void LoadImageFromPath(HWND hwnd, char* filePath) {
     // Allocate the destination buffer for GDI
     pDest = (unsigned char*)malloc(stride * imgH);
     if (!pDest) {
-        stbi_image_free(pSrc);
+        if(!isWebp && !isPCX) stbi_image_free(pSrc);
         MessageBox(hwnd, "Out of memory", "Error", MB_ICONERROR);
         return;
     }

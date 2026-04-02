@@ -5,6 +5,7 @@
 #include <windows.h>
 #include <commdlg.h>
 
+#include "resource.h"
 #include "deffix.h"
 
 #define STB_IMAGE_IMPLEMENTATION
@@ -538,6 +539,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrev, LPSTR lpCmdLine, int nC
     wc.lpfnWndProc   = WindowProc;
     wc.hInstance     = hInstance;
     wc.hCursor       = LoadCursor(NULL, IDC_ARROW);
+    wc.hIcon         = LoadIcon(hInstance, MAKEINTRESOURCEA(IDI_APPICON));;
     wc.hbrBackground = (HBRUSH)(COLOR_WINDOW + 1);
     wc.lpszClassName = MAINWIN_CLASS;
 

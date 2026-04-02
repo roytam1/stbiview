@@ -600,7 +600,7 @@ void UpdateScrollbars(HWND hwnd) {
 }
 
 void LoadImageFromPath(HWND hwnd, char* filePath) {
-    int imgW, imgH, channels, bpp, stride, x, y;
+    int imgW = 0, imgH = 0, channels, bpp, stride, x, y;
     unsigned char *pSrc, *pDest;
     char *fileExt;
     HDC hdcScreen;
@@ -787,6 +787,11 @@ void OpenPicFile(HWND hwnd) {
 
 LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam) {
     switch (uMsg) {
+        case WM_ERASEBKGND:
+            // Return 1 to tell Windows we will erase the background ourselves.
+            // This is the most important step to stop flickering.
+            return 1;
+
         case WM_QUERYNEWPALETTE:
             if (hPalette) {
                 UINT u;
@@ -820,27 +825,77 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam) 
         case WM_PAINT: {
             PAINTSTRUCT ps;
             RECT rc;
+            HBRUSH hBrush;
             int srcH, srcY;
             HDC hdc = BeginPaint(hwnd, &ps);
+
+            GetClientRect(hwnd, &rc);
+            hBrush = CreateSolidBrush(GetSysColor(COLOR_WINDOW));
+
             if (pRawData) {
+
                 // IMPORTANT: You must select/realize before every draw call
                 if (hPalette) {
                     SelectPalette(hdc, hPalette, FALSE);
                     RealizePalette(hdc);
                 }
 
-                GetClientRect(hwnd, &rc);
-                SetStretchBltMode(hdc, COLORONCOLOR);
+                if (mvi_isWin32s()) {
+                    // --- WIN32S PATH: Direct to Screen (Most Stable) ---
 
-                srcH = rc.bottom;
-                srcY = imgHeight - scrollY - srcH;
+                    // Fill background manually since we trapped WM_ERASEBKGND
+                    FillRect(hdc, &rc, hBrush);
+                    DeleteObject(hBrush);
 
-                StretchDIBits(hdc, 
-                    0, 0, rc.right, rc.bottom,
-                    scrollX, srcY, 
-                    rc.right, srcH,
-                    pRawData, &bmi, DIB_RGB_COLORS, SRCCOPY);
+                    // Win32s handles SetDIBitsToDevice much better than Memory DCs
+                    srcH = rc.bottom;
+                    srcY = imgHeight - scrollY - srcH;
+
+                    StretchDIBits(hdc, 
+                        0, 0, rc.right, rc.bottom,
+                        scrollX, srcY, 
+                        rc.right, srcH,
+                        pRawData, &bmi, DIB_RGB_COLORS, SRCCOPY);
+                } 
+                else {
+                    // --- NT4/9x PATH: Double Buffered (Flicker-Free) ---
+                    HBITMAP hMemBmp, hOldBmp;
+                    HDC hMemDC = CreateCompatibleDC(hdc);
+                    hMemBmp = CreateCompatibleBitmap(hdc, rc.right, rc.bottom);
+                    hOldBmp = (HBITMAP)SelectObject(hMemDC, hMemBmp);
+
+                    if (hPalette) {
+                        SelectPalette(hMemDC, hPalette, FALSE);
+                        RealizePalette(hMemDC);
+                    }
+
+                    // Fill background in the memory DC
+                    FillRect(hMemDC, &rc, hBrush);
+                    DeleteObject(hBrush);
+
+                    // On NT4, we can even use StretchDIBits in the memory DC
+                    srcH = rc.bottom;
+                    srcY = imgHeight - scrollY - srcH;
+
+                    StretchDIBits(hMemDC, 
+                        0, 0, rc.right, rc.bottom,
+                        scrollX, srcY, 
+                        rc.right, srcH,
+                        pRawData, &bmi, DIB_RGB_COLORS, SRCCOPY);
+
+                    // "Flip" the buffer: Copy the memory DC to the real screen DC
+                    BitBlt(hdc, 0, 0, rc.right, rc.bottom, hMemDC, 0, 0, SRCCOPY);
+
+                    SelectObject(hMemDC, hOldBmp);
+                    DeleteObject(hMemBmp);
+                    DeleteDC(hMemDC);
+                }
+            } else {
+                // Fill background manually since we trapped WM_ERASEBKGND
+                FillRect(hdc, &rc, hBrush);
+                DeleteObject(hBrush);
             }
+
             EndPaint(hwnd, &ps);
             return 0;
         }
@@ -926,7 +981,7 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam) 
 
         case WM_HSCROLL:
         case WM_VSCROLL: {
-            int oldPos;
+            int oldPos = 0, dx = 0, dy = 0;
             int bar = (uMsg == WM_HSCROLL) ? SB_HORZ : SB_VERT;
             SCROLLINFO si = { sizeof(SCROLLINFO), SIF_ALL };
             si.nTrackPos = HIWORD(wParam);
@@ -947,13 +1002,17 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam) 
             MySetScrollInfo(hwnd, bar, &si, TRUE);
             MyGetScrollInfo(hwnd, bar, &si); // Get clamped position
 
-            if (uMsg == WM_HSCROLL) scrollX = si.nPos;
-            else scrollY = si.nPos;
-
-            // Only redraw if the position actually changed
-            if (oldPos != si.nPos) {
-                InvalidateRect(hwnd, NULL, TRUE);
+            if (uMsg == WM_HSCROLL) {
+                scrollX = si.nPos;
+                dx = oldPos - scrollX;
+            } else {
+                scrollY = si.nPos;
+                dy = oldPos - scrollY;
             }
+
+            // Scroll existing pixels and only invalidate the "new" area
+            ScrollWindowEx(hwnd, dx, dy, NULL, NULL, NULL, NULL, SW_INVALIDATE | SW_ERASE);
+            UpdateWindow(hwnd); // Forces immediate repaint
             return 0;
         }
 

@@ -1,1 +1,1 @@
-cl /O2 picview.c user32.lib comdlg32.lib gdi32.lib shell32.lib
+cl /O2 picview.c user32.lib comdlg32.lib gdi32.lib shell32.lib %1 %2 %3 %4 %5 %6 %7 %8 %9

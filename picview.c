@@ -390,7 +390,53 @@ void InitAllLUTs() {
     LUT_inited = 1;
 }
 
-// Floyd-Steinberg Dither Function
+// Floyd-Steinberg Dither Functions
+void ApplyMonoDithering(unsigned char* pixels, int width, int height) {
+    int i, y, x;
+    int* errorBuf = (int*)malloc(width * height * sizeof(int));
+    if (!errorBuf) return;
+
+    // Convert RGB to Grayscale and scale up by 16 for fixed-point error
+    for (i = 0; i < width * height; i++) {
+        int r, g, b, gray;
+        r = pixels[i * 3 + 0];
+        g = pixels[i * 3 + 1];
+        b = pixels[i * 3 + 2];
+        // Integer Luminance formula
+        gray = (r * 77 + g * 151 + b * 28) >> 8;
+        errorBuf[i] = gray << 4; 
+    }
+
+    for (y = 0; y < height; y++) {
+        for (x = 0; x < width; x++) {
+            int err, idx = y * width + x;
+
+            // 1. Thresholding (The "Closest Color" is just Black or White)
+            int currentVal = errorBuf[idx] >> 4;
+            BYTE result = (currentVal > 127) ? 255 : 0;
+
+            // 2. Store back to RGB buffer (all channels same for gray)
+            pixels[idx * 3 + 0] = result;
+            pixels[idx * 3 + 1] = result;
+            pixels[idx * 3 + 2] = result;
+
+            // 3. Error Calculation
+            err = errorBuf[idx] - (result << 4);
+
+            // 4. Diffuse Error (Single Channel)
+            if (x + 1 < width) 
+                errorBuf[idx + 1] += (err * 7) >> 4;
+            if (y + 1 < height) {
+                int rowNext = idx + width;
+                if (x > 0) errorBuf[rowNext - 1] += (err * 3) >> 4;
+                errorBuf[rowNext] += (err * 5) >> 4;
+                if (x + 1 < width) errorBuf[rowNext + 1] += err >> 4;
+            }
+        }
+    }
+    free(errorBuf);
+}
+
 void ApplyDithering(unsigned char* pixels, int width, int height, int colorCount) {
     // Error buffer stores RGB errors shifted by 4 bits for precision.
     // Signed int is necessary to handle negative error values.
@@ -688,14 +734,22 @@ TrySTB:
             if (!hPalette)
                 hPalette = CreateWebSafePalette();
             InitAllLUTs();
-            ApplyDithering(pSrc, imgW, imgH, (bpp <= 4) ? 16 : 216);
+            if(bpp == 1) ApplyMonoDithering(pSrc, imgW, imgH);
+            else ApplyDithering(pSrc, imgW, imgH, (bpp <= 4) ? 16 : 216);
         }
-    } else if (FSdither > 1) { // force FS dither, to 16 colors when FSdither=2, to web-safe 256 colors otherwise
+    } else if (FSdither > 1) { // force FS dither, to 2 colors when FSdither=2, to 16 colors when FSdither=3, to web-safe 256 colors when FSdither=4
         UpdateWindowTitle(hwnd, "Dithering...");
         if (!hPalette)
             hPalette = CreateWebSafePalette();
         InitAllLUTs();
-        ApplyDithering(pSrc, imgW, imgH, (FSdither == 2) ? 16 : 216);
+        switch (FSdither) {
+            case 2:
+                ApplyMonoDithering(pSrc, imgW, imgH);
+                break;
+            case 3:
+            case 4:
+                ApplyDithering(pSrc, imgW, imgH, (FSdither == 3) ? 16 : 216);
+        }
     } // no FS dithering when FSdither=0
 
     // 4. SINGLE-PASS: Swizzle + Padded + Flip to Bottom-Up
@@ -964,7 +1018,7 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam) 
                     UpdateWindowTitle(hwnd, szFile);
                     break;
                 case 'D':
-                    FSdither = FSdither == 3 ? 0 : FSdither+1;
+                    FSdither = FSdither == 4 ? 0 : FSdither+1;
                     UpdateWindowTitle(hwnd, szFile);
                     break;
                 case 'S':

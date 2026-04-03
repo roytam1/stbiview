@@ -33,5 +33,7 @@ int WINAPI _imp__MessageBoxA(HWND hWnd, LPCSTR lpText, LPCSTR lpCaption, UINT uT
     return MessageBoxExA(hWnd, lpText, lpCaption, uType, 0);
 }
 
+#undef MessageBox
 #define MessageBox(a,b,c,d) MessageBoxExA(a,b,c,d,0);
+#define MessageBoxA MessageBox
 #endif

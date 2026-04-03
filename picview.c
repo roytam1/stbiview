@@ -725,7 +725,7 @@ TrySTB:
 
     // Detect if we should dither (e.g., if bit depth is low)
     hdcScreen = GetDC(NULL);
-    bpp = GetDeviceCaps(hdcScreen, BITSPIXEL);
+    bpp = GetDeviceCaps(hdcScreen, BITSPIXEL) * GetDeviceCaps(hdcScreen, PLANES);
     ReleaseDC(NULL, hdcScreen);
 
     if (FSdither == 1) { // auto FS dither when target surface bpp <= 8

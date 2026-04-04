@@ -425,12 +425,18 @@ void ApplyMonoDithering(unsigned char* pixels, int width, int height) {
 
             // 4. Diffuse Error (Single Channel)
             if (x + 1 < width) 
-                errorBuf[idx + 1] += (err * 7) >> 4;
+                errorBuf[idx + 1] += (err * 4) >> 4;
+            if (x + 2 < width) 
+                errorBuf[idx + 2] += (err * 1) >> 4;
             if (y + 1 < height) {
                 int rowNext = idx + width;
-                if (x > 0) errorBuf[rowNext - 1] += (err * 3) >> 4;
-                errorBuf[rowNext] += (err * 5) >> 4;
-                if (x + 1 < width) errorBuf[rowNext + 1] += err >> 4;
+                if (x > 0) errorBuf[rowNext - 1] += (err * 2) >> 4;
+                errorBuf[rowNext] += (err * 4) >> 4;
+                if (x + 1 < width) errorBuf[rowNext + 1] += (err * 2) >> 4;
+            }
+            if (y + 2 < height) {
+                int row2 = idx + width*2;
+                errorBuf[row2] += (err * 1) >> 4;
             }
         }
     }
@@ -488,36 +494,51 @@ void ApplyDithering(unsigned char* pixels, int width, int height, int colorCount
             errG = errorBuf[idx+1] - (newP.g << 4);
             errB = errorBuf[idx+2] - (newP.b << 4);
 
-            // 5. Error Diffusion (Floyd-Steinberg Weights)
-            // We use integer weights: 7/16, 3/16, 5/16, 1/16
+            // 5. Error Diffusion (Amanvir Parhar Weights)
+            // We use integer weights: 4/16, 1/16, 2/16, 4/16, 2/16, 1/16 (2/16 will be lost)
 
-            // Pixel to the Right (7/16)
+            // Pixel to the Right (4/16)
             if (x + 1 < width) {
-                errorBuf[idx + 3] += (errR * 7) >> 4;
-                errorBuf[idx + 4] += (errG * 7) >> 4;
-                errorBuf[idx + 5] += (errB * 7) >> 4;
+                errorBuf[idx + 3] += (errR * 4) >> 4;
+                errorBuf[idx + 4] += (errG * 4) >> 4;
+                errorBuf[idx + 5] += (errB * 4) >> 4;
+            }
+
+            // Right's Right (1/16)
+            if (x + 2 < width) {
+                errorBuf[idx + 6] += errR >> 4;
+                errorBuf[idx + 7] += errG >> 4;
+                errorBuf[idx + 8] += errB >> 4;
             }
 
             if (y + 1 < height) {
                 int rowNext = idx + (width * 3);
 
-                // Down-Left (3/16)
+                // Down-Left (2/16)
                 if (x > 0) {
-                    errorBuf[rowNext - 3] += (errR * 3) >> 4;
-                    errorBuf[rowNext - 2] += (errG * 3) >> 4;
-                    errorBuf[rowNext - 1] += (errB * 3) >> 4;
+                    errorBuf[rowNext - 3] += (errR * 2) >> 4;
+                    errorBuf[rowNext - 2] += (errG * 2) >> 4;
+                    errorBuf[rowNext - 1] += (errB * 2) >> 4;
                 }
-                // Down (5/16)
-                errorBuf[rowNext]     += (errR * 5) >> 4;
-                errorBuf[rowNext + 1] += (errG * 5) >> 4;
-                errorBuf[rowNext + 2] += (errB * 5) >> 4;
+                // Down (4/16)
+                errorBuf[rowNext]     += (errR * 4) >> 4;
+                errorBuf[rowNext + 1] += (errG * 4) >> 4;
+                errorBuf[rowNext + 2] += (errB * 4) >> 4;
 
-                // Down-Right (1/16)
+                // Down-Right (2/16)
                 if (x + 1 < width) {
-                    errorBuf[rowNext + 3] += errR >> 4;
-                    errorBuf[rowNext + 4] += errG >> 4;
-                    errorBuf[rowNext + 5] += errB >> 4;
+                    errorBuf[rowNext + 3] += (errR * 2) >> 4;
+                    errorBuf[rowNext + 4] += (errG * 2) >> 4;
+                    errorBuf[rowNext + 5] += (errB * 2) >> 4;
                 }
+            }
+            if (y + 2 < height) {
+                int row2 = idx + (width * 3)*2;
+
+                // Down's Down (1/16)
+                errorBuf[row2]     += errR >> 4;
+                errorBuf[row2 + 1] += errG >> 4;
+                errorBuf[row2 + 2] += errB >> 4;
             }
         }
     }

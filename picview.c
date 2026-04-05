@@ -784,7 +784,7 @@ unsigned char* LoadQOI(const char* szPath, int* w, int* h) {
                 run = b1 & 0x3f;
             }
 
-            index_pos = (r * 3 + g * 5 + b * 7 + a * 11) % 64;
+            index_pos = ((r << 1) + r + (g << 2) + g + (b << 3) - b + (a << 3) + a + a + a) & 63;
             index[index_pos][0] = r; index[index_pos][1] = g;
             index[index_pos][2] = b; index[index_pos][3] = a;
         }
@@ -1003,7 +1003,7 @@ void OpenPicFile(HWND hwnd) {
     ofn.hwndOwner = hwnd;
     ofn.lpstrFile = szFile;
     ofn.nMaxFile = sizeof(szFile);
-    ofn.lpstrFilter = "Images\0*.jpg;*.png;*.gif;*.bmp;*.tga;*.pnm;*.ppm;*.pgm;*.webp;*.web;*.wbp;*.pcx;*.xbm;*.xpm\0All Files\0*.*\0";
+    ofn.lpstrFilter = "Images\0*.jpg;*.png;*.gif;*.bmp;*.tga;*.pnm;*.ppm;*.pgm;*.webp;*.web;*.wbp;*.pcx;*.xbm;*.xpm;*.qoi\0All Files\0*.*\0";
     ofn.Flags = OFN_PATHMUSTEXIST | OFN_FILEMUSTEXIST;
 
     if (GetOpenFileName(&ofn)) {

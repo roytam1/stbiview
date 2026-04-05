@@ -621,6 +621,111 @@ BOOL SaveRawBufferToBMP(const char* szFileName) {
     return TRUE;
 }
 
+unsigned char* LoadXBM(const char* szPath, int* w, int* h) {
+    char line[256];
+    int width = 0, height = 0, bytesPerRow;
+    unsigned char* pRGB;
+    int x = 0, y = 0, b;
+    unsigned int val;
+    FILE* f = fopen(szPath, "r");
+    if (!f) return NULL;
+
+    // 1. Simple parser to find #define name_width and #define name_height
+    while (fgets(line, sizeof(line), f)) {
+        if (strstr(line, "_width")) sscanf(line, "%*s %*s %d", &width);
+        if (strstr(line, "_height")) sscanf(line, "%*s %*s %d", &height);
+        if (strstr(line, "static char")) break;
+    }
+
+    if (width <= 0 || height <= 0) { fclose(f); return NULL; }
+
+    // 2. Allocate RGB buffer (Viewer expects 24-bit)
+    pRGB = (unsigned char*)malloc(width * height * 3);
+    bytesPerRow = (width + 7) / 8;
+
+    // Scan for hex values (e.g., 0xAB)
+    while (fscanf(f, " 0x%x ,", &val) == 1) {
+        for (b = 0; b < 8 && x < width; b++) {
+            // XBM is LSB first
+            int idx;
+            BYTE color = (val & (1 << b)) ? 0 : 255; // 1 = Black, 0 = White
+            idx = (y * width + x) * 3;
+            pRGB[idx] = pRGB[idx+1] = pRGB[idx+2] = color;
+            x++;
+        }
+        if (x >= width) { x = 0; y++; }
+        if (y >= height) break;
+    }
+
+    fclose(f);
+    *w = width; *h = height;
+    return pRGB;
+}
+
+unsigned char* LoadXPM(const char* szPath, int* w, int* h) {
+    typedef struct { char key[4]; BYTE r, g, b; } XPM_COLOR;
+    int width, height, ncolors, cpp, i, y, x, k;
+    char line[1024];
+    unsigned char* pRGB;
+    XPM_COLOR* colors;
+    FILE* f = fopen(szPath, "r");
+    if (!f) return NULL;
+
+    // Skip to the values line (usually the first line in quotes)
+    while (fgets(line, sizeof(line), f) && !strchr(line, '"'));
+
+    sscanf(strchr(line, '"') + 1, "%d %d %d %d", &width, &height, &ncolors, &cpp);
+
+    // Simplest approach: A fixed array for the color map (XPM2/3 style)
+    // Note: For a 486SX, a simple linear search of 'ncolors' is fast enough
+    colors = malloc(ncolors * sizeof(XPM_COLOR));
+
+    for (i = 0; i < ncolors; i++) {
+        char *p, *hex;
+TryNextColor:
+        if(!fgets(line, sizeof(line), f)) break;
+        p = strchr(line, '"');
+        if(!p) goto TryNextColor;
+        ++p;
+        strncpy(colors[i].key, p, cpp);
+        colors[i].key[cpp] = '\0';
+
+        hex = strrchr(p, '#');
+        if (hex) {
+            unsigned int r, g, b;
+            sscanf(hex + 1, "%02x%02x%02x", &r, &g, &b);
+            colors[i].r = (BYTE)r; colors[i].g = (BYTE)g; colors[i].b = (BYTE)b;
+        }
+    }
+
+    pRGB = (unsigned char*)malloc(width * height * 3);
+    for (y = 0; y < height; y++) {
+        char* p;
+TryNextLine:
+        if(!fgets(line, sizeof(line), f)) break;
+        p = strchr(line, '"');
+        if(!p) goto TryNextLine;
+        ++p;
+        for (x = 0; x < width; x++) {
+            // Find key in color map
+            for (k = 0; k < ncolors; k++) {
+                if (strncmp(p + (x * cpp), colors[k].key, cpp) == 0) {
+                    int idx = (y * width + x) * 3;
+                    pRGB[idx]   = colors[k].r;
+                    pRGB[idx+1] = colors[k].g;
+                    pRGB[idx+2] = colors[k].b;
+                    break;
+                }
+            }
+        }
+    }
+
+    free(colors);
+    fclose(f);
+    *w = width; *h = height;
+    return pRGB;
+}
+
 void LoadImageFromPath(HWND hwnd, char* filePath) {
     int imgW = 0, imgH = 0, channels, bpp, stride, x, y;
     unsigned char *pSrc, *pDest;
@@ -674,6 +779,16 @@ void LoadImageFromPath(HWND hwnd, char* filePath) {
     if(fileExt && stricmp(fileExt,".pcx") == 0) {
         isPCX = 1;
         pSrc = drpcx_load_file(filePath, DRPCX_FALSE, &imgW, &imgH, &channels, 3);
+    }
+    else
+    if(fileExt && stricmp(fileExt,".xbm") == 0) {
+        isWebp = 1; // not really webp, but same malloc style as webp
+        pSrc = LoadXBM(filePath, &imgW, &imgH);
+    }
+    else
+    if(fileExt && stricmp(fileExt,".xpm") == 0) {
+        isWebp = 1; // not really webp, but same malloc style as webp
+        pSrc = LoadXPM(filePath, &imgW, &imgH);
     }
     else
     {
@@ -812,7 +927,7 @@ void OpenPicFile(HWND hwnd) {
     ofn.hwndOwner = hwnd;
     ofn.lpstrFile = szFile;
     ofn.nMaxFile = sizeof(szFile);
-    ofn.lpstrFilter = "Images\0*.jpg;*.png;*.gif;*.bmp;*.tga;*.pnm;*.ppm;*.pgm;*.webp;*.web;*.wbp;*.pcx\0All Files\0*.*\0";
+    ofn.lpstrFilter = "Images\0*.jpg;*.png;*.gif;*.bmp;*.tga;*.pnm;*.ppm;*.pgm;*.webp;*.web;*.wbp;*.pcx;*.xbm;*.xpm\0All Files\0*.*\0";
     ofn.Flags = OFN_PATHMUSTEXIST | OFN_FILEMUSTEXIST;
 
     if (GetOpenFileName(&ofn)) {

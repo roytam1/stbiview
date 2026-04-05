@@ -726,6 +726,77 @@ TryNextLine:
     return pRGB;
 }
 
+#define QOI_MAGIC (((unsigned int)'q' << 24) | ((unsigned int)'o' << 16) | \
+                   ((unsigned int)'i' << 8) | (unsigned int)'f')
+
+unsigned char* LoadQOI(const char* szPath, int* w, int* h) {
+    unsigned int magic;
+    unsigned int width, height, i;
+    unsigned char channels, colorspace;
+    unsigned char head[10];
+    unsigned char index[64][4];
+    unsigned char* pRGB;
+    unsigned char r = 0, g = 0, b = 0, a = 255;
+    int px_len, run = 0;
+    FILE* f = fopen(szPath, "rb");
+    if (!f) return NULL;
+
+    // Read Header (14 bytes)
+    fread(&magic, 4, 1, f);
+    if (magic != 0x66696f71) { fclose(f); return NULL; } // "qoif" in little-endian
+
+    // Swap endianness for Win32 (QOI is Big Endian)
+    fread(head, 1, 10, f);
+    width = (head[0] << 24) | (head[1] << 16) | (head[2] << 8) | head[3];
+    height = (head[4] << 24) | (head[5] << 16) | (head[6] << 8) | head[7];
+    channels = head[8]; 
+
+    pRGB = (unsigned char*)malloc(width * height * 3);
+    memset(index, 0, 64 * 4);
+
+    px_len = width * height * 3;
+
+    for (i = 0; i < px_len; i += 3) {
+        if (run > 0) {
+            run--;
+        } else {
+            int index_pos, b1 = fgetc(f);
+            if (b1 == EOF) break;
+
+            if (b1 == 0xff) { // QOI_OP_RGBA
+                r = fgetc(f); g = fgetc(f); b = fgetc(f); a = fgetc(f);
+            } else if (b1 == 0xfe) { // QOI_OP_RGB
+                r = fgetc(f); g = fgetc(f); b = fgetc(f);
+            } else if ((b1 & 0xc0) == 0x00) { // QOI_OP_INDEX
+                int idx = b1 & 0x3f;
+                r = index[idx][0]; g = index[idx][1]; b = index[idx][2]; a = index[idx][3];
+            } else if ((b1 & 0xc0) == 0x40) { // QOI_OP_DIFF
+                r += ((b1 >> 4) & 0x03) - 2;
+                g += ((b1 >> 2) & 0x03) - 2;
+                b += ( b1       & 0x03) - 2;
+            } else if ((b1 & 0xc0) == 0x80) { // QOI_OP_LUMA
+                int b2 = fgetc(f);
+                int vg = (b1 & 0x3f) - 32;
+                r += vg - 8 + ((b2 >> 4) & 0x0f);
+                g += vg;
+                b += vg - 8 + ( b2       & 0x0f);
+            } else if ((b1 & 0xc0) == 0xc0) { // QOI_OP_RUN
+                run = b1 & 0x3f;
+            }
+
+            index_pos = (r * 3 + g * 5 + b * 7 + a * 11) % 64;
+            index[index_pos][0] = r; index[index_pos][1] = g;
+            index[index_pos][2] = b; index[index_pos][3] = a;
+        }
+
+        pRGB[i] = r; pRGB[i+1] = g; pRGB[i+2] = b;
+    }
+
+    fclose(f);
+    *w = (int)width; *h = (int)height;
+    return pRGB;
+}
+
 void LoadImageFromPath(HWND hwnd, char* filePath) {
     int imgW = 0, imgH = 0, channels, bpp, stride, x, y;
     unsigned char *pSrc, *pDest;
@@ -779,6 +850,11 @@ void LoadImageFromPath(HWND hwnd, char* filePath) {
     if(fileExt && stricmp(fileExt,".pcx") == 0) {
         isPCX = 1;
         pSrc = drpcx_load_file(filePath, DRPCX_FALSE, &imgW, &imgH, &channels, 3);
+    }
+    else
+    if(fileExt && stricmp(fileExt,".qoi") == 0) {
+        isWebp = 1; // not really webp, but same malloc style as webp
+        pSrc = LoadQOI(filePath, &imgW, &imgH);
     }
     else
     if(fileExt && stricmp(fileExt,".xbm") == 0) {

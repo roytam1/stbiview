@@ -299,9 +299,11 @@ int WINAPI MyGetScrollInfo_init(HWND hwnd, int nBar, LPSCROLLINFO lpsi)
 }
 /* end of [G|S]etScrollInfo */
 
-LRESULT CALLBACK WindowProc(HWND, UINT, WPARAM, LPARAM);
+void UpdateWindowTitle(HWND hwnd, char* filePath);
+void UpdateScrollbars(HWND hwnd);
 void LoadImageFromPath(HWND hwnd, char* filePath);
 void OpenPicFile(HWND hwnd);
+LRESULT CALLBACK WindowProc(HWND, UINT, WPARAM, LPARAM);
 
 /* Global State */
 HPALETTE hPalette = NULL; // New: Palette handle
@@ -619,76 +621,6 @@ BOOL SaveRawBufferToBMP(const char* szFileName) {
     return TRUE;
 }
 
-void UpdateWindowTitle(HWND hwnd, char* filePath) {
-    char newTitle[500];
-    wsprintf(newTitle, "%s (D=%d) - %s", MAINWIN_TITLE, FSdither, *filePath ? filePath : MAINWIN_TITLE_SUFFIX);
-    SetWindowText(hwnd, newTitle);
-}
-
-int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrev, LPSTR lpCmdLine, int nCmdShow) {
-    HWND hwnd;
-    MSG msg;
-    WNDCLASS wc = {0};
-    wc.lpfnWndProc   = WindowProc;
-    wc.hInstance     = hInstance;
-    wc.hCursor       = LoadCursor(NULL, IDC_ARROW);
-    wc.hIcon         = LoadIcon(hInstance, MAKEINTRESOURCEA(IDI_APPICON));;
-    wc.hbrBackground = (HBRUSH)(COLOR_WINDOW + 1);
-    wc.lpszClassName = MAINWIN_CLASS;
-
-    RegisterClass(&wc);
-
-    hwnd = CreateWindowEx(WS_EX_ACCEPTFILES, MAINWIN_CLASS, MAINWIN_TITLE " - " MAINWIN_TITLE_SUFFIX,
-        WS_OVERLAPPEDWINDOW | WS_HSCROLL | WS_VSCROLL,
-        CW_USEDEFAULT, CW_USEDEFAULT, 800, 600, NULL, NULL, hInstance, NULL);
-
-    ShowWindow(hwnd, nCmdShow);
-
-    // --- COMMAND LINE PROCESSING ---
-    // __argc and __argv are globals defined in stdlib.h / TCHAR.h
-    // index 0 is the EXE path, index 1 is the first argument (the file)
-    if (__argc > 1) {
-        LoadImageFromPath(hwnd, __argv[1]);
-        UpdateWindowTitle(hwnd, szFile);
-    }
-
-    while (GetMessage(&msg, NULL, 0, 0)) {
-        TranslateMessage(&msg);
-        DispatchMessage(&msg);
-    }
-    return msg.wParam;
-}
-
-// Recalculates scrollbar ranges based on current window size
-void UpdateScrollbars(HWND hwnd) {
-    int cw, ch;
-    RECT clientRect;
-    SCROLLINFO si = { sizeof(SCROLLINFO), SIF_RANGE | SIF_PAGE | SIF_DISABLENOSCROLL };
-    MyGetScrollInfo(hwnd, SB_HORZ, &si);
-
-    GetClientRect(hwnd, &clientRect);
-    cw = clientRect.right;
-    ch = clientRect.bottom;
-
-    // Horizontal
-    si.nMin = 0;
-    si.nMax = imgWidth;
-    if(MyGetScrollInfo == MyGetScrollInfo_fallback) si.nMax -= cw;
-    si.nPage = cw;
-    MySetScrollInfo(hwnd, SB_HORZ, &si, TRUE);
-
-    // Vertical
-    si.nMin = 0;
-    si.nMax = imgHeight;
-    if(MyGetScrollInfo == MyGetScrollInfo_fallback) si.nMax -= ch;
-    si.nPage = ch;
-    MySetScrollInfo(hwnd, SB_VERT, &si, TRUE);
-
-    // Ensure scroll position doesn't hang out in "dead space" after shrink
-    scrollX = GetScrollPos(hwnd, SB_HORZ);
-    scrollY = GetScrollPos(hwnd, SB_VERT);
-}
-
 void LoadImageFromPath(HWND hwnd, char* filePath) {
     int imgW = 0, imgH = 0, channels, bpp, stride, x, y;
     unsigned char *pSrc, *pDest;
@@ -858,6 +790,11 @@ void SaveFile(HWND hwnd) {
     ofn.lpstrFilter = "Bitmap Files (*.bmp)\0*.bmp\0";
     ofn.Flags = OFN_OVERWRITEPROMPT;
 
+    if (!pRawData) {
+        MessageBox(hwnd, "No image loaded for export.", "Error", MB_ICONERROR);
+        return;
+    }
+
     if (GetSaveFileName(&ofn)) {
         if (SaveRawBufferToBMP(szSaveFile)) {
             MessageBox(hwnd, "File saved successfully!", "Success", MB_OK);
@@ -881,6 +818,76 @@ void OpenPicFile(HWND hwnd) {
     if (GetOpenFileName(&ofn)) {
         LoadImageFromPath(hwnd, szFile);
     }
+}
+
+void UpdateWindowTitle(HWND hwnd, char* filePath) {
+    char newTitle[500];
+    wsprintf(newTitle, "%s (D=%d) - %s", MAINWIN_TITLE, FSdither, *filePath ? filePath : MAINWIN_TITLE_SUFFIX);
+    SetWindowText(hwnd, newTitle);
+}
+
+int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrev, LPSTR lpCmdLine, int nCmdShow) {
+    HWND hwnd;
+    MSG msg;
+    WNDCLASS wc = {0};
+    wc.lpfnWndProc   = WindowProc;
+    wc.hInstance     = hInstance;
+    wc.hCursor       = LoadCursor(NULL, IDC_ARROW);
+    wc.hIcon         = LoadIcon(hInstance, MAKEINTRESOURCEA(IDI_APPICON));;
+    wc.hbrBackground = (HBRUSH)(COLOR_WINDOW + 1);
+    wc.lpszClassName = MAINWIN_CLASS;
+
+    RegisterClass(&wc);
+
+    hwnd = CreateWindowEx(WS_EX_ACCEPTFILES, MAINWIN_CLASS, MAINWIN_TITLE " - " MAINWIN_TITLE_SUFFIX,
+        WS_OVERLAPPEDWINDOW | WS_HSCROLL | WS_VSCROLL,
+        CW_USEDEFAULT, CW_USEDEFAULT, 800, 600, NULL, NULL, hInstance, NULL);
+
+    ShowWindow(hwnd, nCmdShow);
+
+    // --- COMMAND LINE PROCESSING ---
+    // __argc and __argv are globals defined in stdlib.h / TCHAR.h
+    // index 0 is the EXE path, index 1 is the first argument (the file)
+    if (__argc > 1) {
+        LoadImageFromPath(hwnd, __argv[1]);
+        UpdateWindowTitle(hwnd, szFile);
+    }
+
+    while (GetMessage(&msg, NULL, 0, 0)) {
+        TranslateMessage(&msg);
+        DispatchMessage(&msg);
+    }
+    return msg.wParam;
+}
+
+// Recalculates scrollbar ranges based on current window size
+void UpdateScrollbars(HWND hwnd) {
+    int cw, ch;
+    RECT clientRect;
+    SCROLLINFO si = { sizeof(SCROLLINFO), SIF_RANGE | SIF_PAGE | SIF_DISABLENOSCROLL };
+    MyGetScrollInfo(hwnd, SB_HORZ, &si);
+
+    GetClientRect(hwnd, &clientRect);
+    cw = clientRect.right;
+    ch = clientRect.bottom;
+
+    // Horizontal
+    si.nMin = 0;
+    si.nMax = imgWidth;
+    if(MyGetScrollInfo == MyGetScrollInfo_fallback) si.nMax -= cw;
+    si.nPage = cw;
+    MySetScrollInfo(hwnd, SB_HORZ, &si, TRUE);
+
+    // Vertical
+    si.nMin = 0;
+    si.nMax = imgHeight;
+    if(MyGetScrollInfo == MyGetScrollInfo_fallback) si.nMax -= ch;
+    si.nPage = ch;
+    MySetScrollInfo(hwnd, SB_VERT, &si, TRUE);
+
+    // Ensure scroll position doesn't hang out in "dead space" after shrink
+    scrollX = GetScrollPos(hwnd, SB_HORZ);
+    scrollY = GetScrollPos(hwnd, SB_VERT);
 }
 
 LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam) {

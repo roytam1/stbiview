@@ -365,7 +365,7 @@ HPALETTE Create256ColorPalette() {
     LOGPALETTE* plp;
     HPALETTE hPal;
 
-    palSize = sizeof(LOGPALETTE) + (255 * sizeof(PALETTEENTRY));
+    palSize = sizeof(LOGPALETTE) + (256 * sizeof(PALETTEENTRY));
     plp = (LOGPALETTE*)malloc(palSize);
     
     plp->palVersion = 0x300; // Windows 3.0+

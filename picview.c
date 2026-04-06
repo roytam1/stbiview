@@ -726,9 +726,6 @@ TryNextLine:
     return pRGB;
 }
 
-#define QOI_MAGIC (((unsigned int)'q' << 24) | ((unsigned int)'o' << 16) | \
-                   ((unsigned int)'i' << 8) | (unsigned int)'f')
-
 unsigned char* LoadQOI(const char* szPath, int* w, int* h) {
     unsigned int magic;
     unsigned int width, height, i;

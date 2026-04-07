@@ -299,6 +299,35 @@ int WINAPI MyGetScrollInfo_init(HWND hwnd, int nBar, LPSCROLLINFO lpsi)
 }
 /* end of [G|S]etScrollInfo */
 
+/* DragQueryFile wrapper */
+typedef UINT (WINAPI *apiDragQueryFile)(HDROP, UINT, LPSTR, UINT);
+UINT WINAPI MyDragQueryFile_fallback(HDROP hDrop, UINT iFile, LPSTR lpszFile, UINT cch) {
+	return 0;
+}
+
+UINT WINAPI MyDragQueryFile_init(HDROP hDrop, UINT iFile, LPSTR lpszFile, UINT cch);
+static apiDragQueryFile MyDragQueryFile = MyDragQueryFile_init;
+
+UINT WINAPI MyDragQueryFile_init(HDROP hDrop, UINT iFile, LPSTR lpszFile, UINT cch) {
+	HMODULE hShell32;
+	if( MyDragQueryFile == MyDragQueryFile_init ) {
+		hShell32 = GetModuleHandleA("SHELL32.DLL");
+		// Try new name first
+		MyDragQueryFile = (apiDragQueryFile)GetProcAddress(hShell32, "DragQueryFileA");
+		if( !(MyDragQueryFile) ) {
+			// if not found, try old name
+			MyDragQueryFile = (apiDragQueryFile)GetProcAddress(hShell32, "DragQueryFile");
+			if( !(MyDragQueryFile) ) {
+				MyDragQueryFile = MyDragQueryFile_fallback;
+			}
+		}
+	}
+
+	return MyDragQueryFile( hDrop, iFile, lpszFile, cch );
+
+}
+/* end of DragQueryFile wrapper */
+
 void UpdateWindowTitle(HWND hwnd, char* filePath);
 void UpdateScrollbars(HWND hwnd);
 void LoadImageFromPath(HWND hwnd, char* filePath);
@@ -1213,7 +1242,7 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam) 
             char szDropFile[MAX_PATH];
 
             // Get the count of dropped files (we only care about the first one)
-            if (DragQueryFile(hDrop, 0, szDropFile, MAX_PATH)) {
+            if (MyDragQueryFile(hDrop, 0, szDropFile, MAX_PATH)) {
                 LoadImageFromPath(hwnd, szDropFile);
                 UpdateWindowTitle(hwnd, szFile);
             }

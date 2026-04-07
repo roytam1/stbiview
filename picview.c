@@ -1119,6 +1119,7 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam) 
         case WM_PAINT: {
             PAINTSTRUCT ps;
             RECT rc;
+            HRGN hrgn;
             HBRUSH hBrush;
             int srcH, srcY;
             HDC hdc = BeginPaint(hwnd, &ps);
@@ -1144,7 +1145,8 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam) 
                     // Win32s handles SetDIBitsToDevice much better than Memory DCs
                     srcH = rc.bottom;
                     srcY = imgHeight - scrollY - srcH;
-
+                    hrgn = CreateRectRgn(0, 0, min(rc.right,imgWidth), min(rc.bottom,imgHeight));
+                    SelectClipRgn(hdc, hrgn);
                     StretchDIBits(hdc, 
                         0, 0, rc.right, rc.bottom,
                         scrollX, srcY, 

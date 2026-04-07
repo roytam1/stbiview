@@ -1243,6 +1243,7 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam) 
 
             // Get the count of dropped files (we only care about the first one)
             if (MyDragQueryFile(hDrop, 0, szDropFile, MAX_PATH)) {
+                SetForegroundWindow(hwnd);
                 LoadImageFromPath(hwnd, szDropFile);
                 UpdateWindowTitle(hwnd, szFile);
             }

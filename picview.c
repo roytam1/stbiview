@@ -1053,7 +1053,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrev, LPSTR lpCmdLine, int nC
 void UpdateScrollbars(HWND hwnd) {
     int cw, ch;
     RECT clientRect;
-    SCROLLINFO si = { sizeof(SCROLLINFO), SIF_RANGE | SIF_PAGE | SIF_DISABLENOSCROLL };
+    SCROLLINFO si = { sizeof(SCROLLINFO), SIF_RANGE | SIF_PAGE | SIF_POS | SIF_DISABLENOSCROLL };
     MyGetScrollInfo(hwnd, SB_HORZ, &si);
 
     GetClientRect(hwnd, &clientRect);
@@ -1065,6 +1065,7 @@ void UpdateScrollbars(HWND hwnd) {
     si.nMax = imgWidth;
     if(MyGetScrollInfo == MyGetScrollInfo_fallback) si.nMax -= cw;
     si.nPage = cw;
+    si.nPos = scrollX;
     MySetScrollInfo(hwnd, SB_HORZ, &si, TRUE);
 
     // Vertical
@@ -1072,11 +1073,14 @@ void UpdateScrollbars(HWND hwnd) {
     si.nMax = imgHeight;
     if(MyGetScrollInfo == MyGetScrollInfo_fallback) si.nMax -= ch;
     si.nPage = ch;
+    si.nPos = scrollY;
     MySetScrollInfo(hwnd, SB_VERT, &si, TRUE);
 
     // Ensure scroll position doesn't hang out in "dead space" after shrink
-    scrollX = GetScrollPos(hwnd, SB_HORZ);
-    scrollY = GetScrollPos(hwnd, SB_VERT);
+    MyGetScrollInfo(hwnd, SB_HORZ, &si);
+    scrollX = si.nPos;
+    MyGetScrollInfo(hwnd, SB_VERT, &si);
+    scrollY = si.nPos;
 }
 
 LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam) {
@@ -1237,16 +1241,16 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam) 
                     SendMessage(hwnd, WM_VSCROLL, SB_LINEDOWN, 0);
                     break;
                 case VK_PRIOR: // Page Up
-                    SendMessage(hwnd, WM_VSCROLL, SB_PAGEUP, 0);
+                    SendMessage(hwnd, GetKeyState(VK_CONTROL) & 0x8000 ? WM_HSCROLL : WM_VSCROLL, SB_PAGEUP, 0);
                     break;
                 case VK_NEXT:  // Page Down
-                    SendMessage(hwnd, WM_VSCROLL, SB_PAGEDOWN, 0);
+                    SendMessage(hwnd, GetKeyState(VK_CONTROL) & 0x8000 ? WM_HSCROLL : WM_VSCROLL, SB_PAGEDOWN, 0);
                     break;
                 case VK_HOME:
-                    SendMessage(hwnd, WM_VSCROLL, SB_TOP, 0);
+                    SendMessage(hwnd, GetKeyState(VK_CONTROL) & 0x8000 ? WM_HSCROLL : WM_VSCROLL, SB_TOP, 0);
                     break;
                 case VK_END:
-                    SendMessage(hwnd, WM_VSCROLL, SB_BOTTOM, 0);
+                    SendMessage(hwnd, GetKeyState(VK_CONTROL) & 0x8000 ? WM_HSCROLL : WM_VSCROLL, SB_BOTTOM, 0);
                     break;
 
                 // Horizontal Navigation

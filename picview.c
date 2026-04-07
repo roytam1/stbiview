@@ -392,6 +392,7 @@ int FindClosestColor(RGB_TRIPLE color, RGB_TRIPLE* palette, int count) {
         dr = color.r - palette[i].r;
         dg = color.g - palette[i].g;
         db = color.b - palette[i].b;
+        if (!dr && !dg && !db) return i; // just excetly matched!
         distance =  2*dr*dr + 4*dg*dg + 3*db*db;
         if (distance < minDistance) {
             minDistance = distance;

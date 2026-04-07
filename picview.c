@@ -1061,17 +1061,21 @@ void UpdateScrollbars(HWND hwnd) {
     ch = clientRect.bottom;
 
     // Horizontal
+    if (scrollX + cw > imgWidth) scrollX = max(0, imgWidth - cw);
     si.nMin = 0;
     si.nMax = imgWidth;
     if(MyGetScrollInfo == MyGetScrollInfo_fallback) si.nMax -= cw;
+    if(cw > imgWidth) si.nMax = 1; // to keep scroll bar visible
     si.nPage = cw;
     si.nPos = scrollX;
     MySetScrollInfo(hwnd, SB_HORZ, &si, TRUE);
 
     // Vertical
+    if (scrollY + ch > imgHeight) scrollY = max(0, imgHeight - ch);
     si.nMin = 0;
     si.nMax = imgHeight;
     if(MyGetScrollInfo == MyGetScrollInfo_fallback) si.nMax -= ch;
+    if(ch > imgHeight) si.nMax = 1; // to keep scroll bar visible
     si.nPage = ch;
     si.nPos = scrollY;
     MySetScrollInfo(hwnd, SB_VERT, &si, TRUE);

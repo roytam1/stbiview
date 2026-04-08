@@ -5,6 +5,10 @@
 #define WHEEL_DELTA 120
 #endif
 
+#ifndef WM_CAPTURECHANGED
+#define WM_CAPTURECHANGED 0x0215
+#endif
+
 #ifndef VER_PLATFORM_WIN32_WINDOWS
 /* very old WinSDK, putting more defines inside this guard */
 #define VER_PLATFORM_WIN32_WINDOWS 1

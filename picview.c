@@ -1416,6 +1416,14 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam) 
             }
             return 0;
 
+        case WM_CAPTURECHANGED:
+            // If we lost capture unexpectedly, stop dragging
+            if ((HWND)lParam != hwnd) {
+                bIsDragging = FALSE;
+                SetCursor(LoadCursor(NULL, IDC_ARROW));
+            }
+            break;
+
         case WM_DESTROY:
             if (hPalette) DeleteObject(hPalette);
             if (pRawData) free(pRawData);

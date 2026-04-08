@@ -343,6 +343,8 @@ int scrollX = 0, scrollY = 0;
 int FSdither = 1;
 BITMAPINFO bmi;
 int LUT_inited = 0;
+BOOL bIsDragging = FALSE;
+POINT ptLastMouse;
 
 typedef struct { BYTE r, g, b; } RGB_TRIPLE;
 typedef unsigned char LUT_TYPE[32][32];
@@ -1349,6 +1351,70 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam) 
             UpdateWindow(hwnd); // Forces immediate repaint
             return 0;
         }
+
+        case WM_LBUTTONDOWN:
+            bIsDragging = TRUE;
+            ptLastMouse.x = (short)LOWORD(lParam);
+            ptLastMouse.y = (short)HIWORD(lParam);
+            SetCapture(hwnd); // Keep tracking mouse even if it leaves the window
+            SetCursor(LoadCursor(NULL, IDC_SIZEALL)); // Change cursor to a move icon
+            return 0;
+
+        case WM_LBUTTONUP:
+            if (bIsDragging) {
+                bIsDragging = FALSE;
+                ReleaseCapture();
+                SetCursor(LoadCursor(NULL, IDC_ARROW));
+            }
+            return 0;
+
+        case WM_MOUSEMOVE:
+            if (bIsDragging) {
+                int curX, curY, diffX, diffY, oldX, oldY, maxScrollX, maxScrollY;
+                RECT rc;
+
+                curX = (short)LOWORD(lParam);
+                curY = (short)HIWORD(lParam);
+
+                // Calculate how far we moved since last frame
+                diffX = ptLastMouse.x - curX;
+                diffY = ptLastMouse.y - curY;
+
+                // Apply movement to scroll positions
+                oldX = scrollX;
+                oldY = scrollY;
+
+                scrollX += diffX;
+                scrollY += diffY;
+
+                // Determine Max Scroll Range for Clamping
+                GetClientRect(hwnd, &rc);
+                maxScrollX = max(0, imgWidth - rc.right);
+                maxScrollY = max(0, imgHeight - rc.bottom);
+
+                // Clamp to prevent scrolling into the void
+                if (scrollX < 0) scrollX = 0;
+                if (scrollX > maxScrollX) scrollX = maxScrollX;
+                if (scrollY < 0) scrollY = 0;
+                if (scrollY > maxScrollY) scrollY = maxScrollY;
+
+                ptLastMouse.x = curX;
+                ptLastMouse.y = curY;
+
+                if (oldX != scrollX || oldY != scrollY) {
+                    int dx, dy;
+                    // Only update if the position actually changed significantly
+                    if (abs(oldX - scrollX) > 0 || abs(oldY - scrollY) > 0) {
+                        UpdateScrollbars(hwnd); 
+                    }
+                    // Use our high-performance ScrollWindowEx logic
+                    dx = oldX - scrollX;
+                    dy = oldY - scrollY;
+                    ScrollWindowEx(hwnd, dx, dy, NULL, NULL, NULL, NULL, SW_INVALIDATE | SW_ERASE);
+                    UpdateWindow(hwnd); 
+                }
+            }
+            return 0;
 
         case WM_DESTROY:
             if (hPalette) DeleteObject(hPalette);

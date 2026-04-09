@@ -48,8 +48,10 @@ On a 486SX, every clock cycle counts. The image processing pipeline follows thes
 
 1.  **Compiler:** Recommended MSVC 2.2, 4.0 for authentic Win32s compatibility.
 2.  **Memory Model:** Must be compiled as a **Win32 Target**.
-3.  **Dependencies:** * `stb_image.h` (for JPG/PNG support)
+3.  **Dependencies:**
+    * `stb_image.h` (for JPG/PNG support)
     * `simplewebp.h`
+    * `dr_pcx.h`
     * `GDI32.lib`, `USER32.lib`, `COMDLG32.lib`
 
 ## 📝 Limitations & Notes

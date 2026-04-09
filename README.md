@@ -1,6 +1,6 @@
 # Win32s Retro Image Viewer
 
-A high-performance, lightweight image viewer specifically engineered for **Windows 3.1x (via Win32s)** and **Windows NT 4.0**. This project bypasses modern GDI overhead to provide a smooth experience on **Intel 486SX** and early Pentium hardware.
+A high-performance, lightweight image viewer specifically engineered for **Windows 3.1x (via Win32s)** and **Windows NT 3.10**. This project bypasses modern GDI overhead to provide a smooth experience on **Intel 486SX** and early Pentium hardware.
 
 ## 🚀 Key Features
 

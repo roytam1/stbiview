@@ -18,6 +18,11 @@
 #define DR_PCX_IMPLEMENTATION
 #include "dr_pcx.h"
 
+#define J40_CONFIRM_THAT_THIS_IS_EXPERIMENTAL_AND_POTENTIALLY_UNSAFE
+#define J40_IMPLEMENTATION
+#include "j40.h"
+#include "j40.h"
+
 /* MyVerInfo from GreenPad */
 /* MYVERINFO defination */
 #pragma pack(push,1)
@@ -832,7 +837,8 @@ void LoadImageFromPath(HWND hwnd, char* filePath) {
     char *fileExt;
     HDC hdcScreen;
     simplewebp *swebp;
-    int isWebp = 0, isPCX = 0, swRet;
+    j40_image jxlimage;
+    int isWebp = 0, isJXL = 0, isPCX = 0, swRet;
     char errBuf[MAX_PATH + 50];
 
     UpdateWindowTitle(hwnd, "Loading...");
@@ -874,6 +880,29 @@ void LoadImageFromPath(HWND hwnd, char* filePath) {
         }
         if(swebp) simplewebp_unload(swebp);
         if(swRet == SIMPLEWEBP_NOT_WEBP_ERROR) goto TrySTB;
+    }
+    else
+    if(fileExt && stricmp(fileExt,".jxl") == 0) {
+        isJXL = 1;
+        j40_from_file(&jxlimage, filePath);
+        j40_output_format(&jxlimage, J40_RGBA, J40_U8X4);
+
+        if (j40_next_frame(&jxlimage)) {
+            j40_pixels_u8x4 pixels;
+            j40_frame frame = j40_current_frame(&jxlimage);
+            pixels = j40_frame_pixels_u8x4(&frame, J40_RGBA);
+            imgW = pixels.width;
+            imgH = pixels.height;
+            pSrc = pixels.data;
+
+            /* transform rgba to rgb in-place, also handles stride_bytes properly for our other operations */
+            for(x=0; x < imgW*imgH; x++) {
+                int y = x / imgW;
+                pSrc[x * 3 + 0] = pSrc[x * 4 + (y * (pixels.stride_bytes - imgW*4)) + 0];
+                pSrc[x * 3 + 1] = pSrc[x * 4 + (y * (pixels.stride_bytes - imgW*4)) + 1];
+                pSrc[x * 3 + 2] = pSrc[x * 4 + (y * (pixels.stride_bytes - imgW*4)) + 2];
+            }
+        }
     }
     else
     if(fileExt && stricmp(fileExt,".pcx") == 0) {
@@ -988,6 +1017,7 @@ TrySTB:
 
     if(isWebp) free(pSrc);
     else if(isPCX) drpcx_free(pSrc);
+    else if(isJXL) j40_free(&jxlimage);
     else stbi_image_free(pSrc); // Free the original stb_image buffer
 
     // Copy filename to global

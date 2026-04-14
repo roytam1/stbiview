@@ -8219,8 +8219,9 @@ J40__STATIC_RETURNS_ERR j40__advance(j40__inner *inner, j40__origin origin/*, in
 	j40__st stbuf, *st = &stbuf;
 	j40__frame_st *f;
 	j40_err err;
-
-	j40__init_state(st, inner);
+	j40__inner *inner2 = inner;
+	int64_t nsections, nsections_read;
+	j40__init_state(st, inner2);
 
 	// a less-known coroutine hack with some tweak.
 	// see https://www.chiark.greenend.org.uk/~sgtatham/coroutines.html for basic concepts.
@@ -8233,15 +8234,15 @@ J40__STATIC_RETURNS_ERR j40__advance(j40__inner *inner, j40__origin origin/*, in
 	#define J40__YIELD_AFTER(expr) \
 		do { \
 			err = (expr); \
-			j40__save_state(st, inner, origin); \
+			j40__save_state(st, inner2, origin); \
 			if (err) return err; \
-			inner->state = __LINE__; /* thus each line can have at most one J40__YIELD() call */ \
+			inner2->state = __LINE__; /* thus each line can have at most one J40__YIELD() call */ \
 			/* fall through */ \
 			case __LINE__:; \
 		} while (0)
 
 	f = st->frame;
-	switch (inner->state) {
+	switch (inner2->state) {
 	case 0: // initial state
 
 		J40__YIELD_AFTER(j40__init_buffer(st, 0, INT64_MAX));
@@ -8258,25 +8259,29 @@ J40__STATIC_RETURNS_ERR j40__advance(j40__inner *inner, j40__origin origin/*, in
 			if (f->type != J40__FRAME_REGULAR) J40__YIELD_AFTER(J40__ERR("TODO: non-regular frame"));
 			J40__YIELD_AFTER(j40__read_toc(st, &inner->toc));
 
-			J40__YIELD_AFTER(j40__lf_global_in_section(st, &inner->toc));
-			J40__YIELD_AFTER(j40__hf_global_in_section(st, &inner->toc));
+			J40__YIELD_AFTER(j40__lf_global_in_section(st, &inner2->toc));
+			J40__YIELD_AFTER(j40__hf_global_in_section(st, &inner2->toc));
 
-			J40__YIELD_AFTER(j40__allocate_lf_groups(st, &inner->lf_groups));
+			J40__YIELD_AFTER(j40__allocate_lf_groups(st, &inner2->lf_groups));
 
-			if (inner->toc.single_size) {
+			if (inner2->toc.single_size) {
 				J40__ASSERT(f->num_lf_groups == 1 && f->num_groups == 1 && f->num_passes == 1);
-				J40__YIELD_AFTER(j40__lf_group(st, &inner->lf_groups[0]));
+				J40__YIELD_AFTER(j40__lf_group(st, &inner2->lf_groups[0]));
 				J40__YIELD_AFTER(j40__prepare_dq_matrices(st));
 				J40__YIELD_AFTER(j40__prepare_orders(st));
-				J40__YIELD_AFTER(j40__pass_group(st, 0, 0, 0, f->width, f->height, 0, &inner->lf_groups[0]));
+				J40__YIELD_AFTER(j40__pass_group(st, 0, 0, 0, f->width, f->height, 0, &inner2->lf_groups[0]));
 				J40__YIELD_AFTER(j40__zero_pad_to_byte(st));
 			} else {
-				while (inner->toc.nsections_read < inner->toc.nsections) {
-					J40__YIELD_AFTER(j40__lf_or_pass_group_in_section(st, &inner->toc, inner->lf_groups));
+				nsections = inner2->toc.nsections;
+				nsections_read = inner2->toc.nsections_read;
+				while (nsections_read < nsections) {
+					J40__YIELD_AFTER(j40__lf_or_pass_group_in_section(st, &inner2->toc, inner2->lf_groups));
+					nsections = inner2->toc.nsections;
+					nsections_read = inner2->toc.nsections_read;
 				}
 			}
 
-			J40__YIELD_AFTER(j40__end_of_frame(st, &inner->toc));
+			J40__YIELD_AFTER(j40__end_of_frame(st, &inner2->toc));
 
 			J40__YIELD_AFTER(j40__inverse_transform(st, &f->gmodular));
 			if (!f->is_modular) J40__YIELD_AFTER(j40__combine_vardct(st, inner->lf_groups));

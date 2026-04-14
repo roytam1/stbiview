@@ -91,7 +91,7 @@ int main(int argc, char **argv) {
 #include <stdlib.h>
 
 /* MSVC 6.0 compatibility fixes */
-#if defined(_MSC_VER) && (_MSC_VER <= 1600)
+#if defined(_MSC_VER) && (_MSC_VER <= 1800)
     typedef unsigned char      uint8_t;
     typedef unsigned short     uint16_t;
     typedef unsigned int       uint32_t;
@@ -109,7 +109,9 @@ int main(int argc, char **argv) {
     #define INT64_MIN 0x8000000000000000i64
     #define SIZE_MAX 0xFFFFFFFF
     #define snprintf _snprintf
-    #ifndef STDINT_H_UINTPTR_T_DEFINED
+    #if defined(_WIN64)
+        #define uintptr_t uint64_t
+    #else
         #define uintptr_t uint32_t
     #endif
 #else
@@ -132,7 +134,7 @@ int main(int argc, char **argv) {
 #endif
 
 /* move math related defines lower */
-#if defined(_MSC_VER) && (_MSC_VER <= 1600)
+#if defined(_MSC_VER) && (_MSC_VER <= 1800)
     #define isfinite _finite
     //#define cbrtf(x) (float)pow(x,(double)1/3)
     double cbrt(double x) {

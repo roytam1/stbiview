@@ -101,17 +101,20 @@ int main(int argc, char **argv) {
     typedef signed int         int32_t;
     typedef __int64            int64_t;
     #define inline __inline
-    #define INT16_MIN 0x8000
-    #define INT16_MAX 0x7FFF
-    #define INT32_MAX 0x7FFFFFFF
-    #define INT32_MIN 0x80000000
-    #define INT64_MAX 0x7FFFFFFFFFFFFFFFi64
-    #define INT64_MIN 0x8000000000000000i64
-    #define SIZE_MAX 0xFFFFFFFF
+    #define INT16_MIN ((int16_t)0x8000)
+    #define INT16_MAX ((int16_t)0x7FFF)
+    #define INT32_MAX ((int32_t)0x7FFFFFFF)
+    #define INT32_MIN ((int32_t)0x80000000)
+    #define UINT32_MAX ((uint32_t)0xFFFFFFFF)
+    #define INT64_MAX ((int64_t)0x7FFFFFFFFFFFFFFFi64)
+    #define INT64_MIN ((int64_t)0x8000000000000000i64)
+    #define UINT64_MAX ((uint64_t)0xFFFFFFFFFFFFFFFFi64)
     #define snprintf _snprintf
     #if defined(_WIN64)
+        #define SIZE_MAX UINT64_MAX
         #define uintptr_t uint64_t
     #else
+        #define SIZE_MAX UINT32_MAX
         #define uintptr_t uint32_t
     #endif
 #else
@@ -4285,7 +4288,7 @@ J40__STATIC_RETURNS_ERR j40__(modular_channel,P)(
 			// TODO can overflow at any operator and the bound is incorrect anyway
 			val = j40__unpack_signed((int32_t) val) * n->leaf.multiplier + n->leaf.offset;
 			val += j40__(predict,2P)(st, n->leaf.predictor, &wp, &p);
-			//J40__SHOULD(INT16_MIN <= val && val <= INT16_MAX, "povf");
+			J40__SHOULD(INT16_MIN <= val && val <= INT16_MAX, "povf");
 			outpixels[x] = (intP_t) val;
 			j40__(wp_after_predict,2P)(&wp, x, y, val);
 		}

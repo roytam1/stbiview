@@ -138,22 +138,11 @@ int main(int argc, char **argv) {
     #define isfinite _finite
     //#define cbrtf(x) (float)pow(x,(double)1/3)
     double cbrt(double x) {
-        double b = 1; // use any value except 0
-        double last_b_1 = 0;
-        double last_b_2 = 0;
-        if (x == 0) {
-            // would otherwise return something like 4.257959840008151e-109
-            return 0;
-        }
-        while (last_b_1 != b && last_b_2 != b) {
-            last_b_1 = b;
-            // use (2 * b + x / b / b) / 3 for small numbers, as suggested by  willywonka_dailyblah
-            b = (b + x / b / b) / 2;
-            last_b_2 = b;
-            // use (2 * b + x / b / b) / 3 for small numbers, as suggested by  willywonka_dailyblah
-            b = (b + x / b / b) / 2;
-        }
-        return b;
+        double y = 1.0/3.0;
+        if (x < 0)
+            return -1.0 * pow(-1.0*x, y);
+        else
+            return pow(x, y);
     }
     #define cbrtf(x) (float)cbrt(x)
 

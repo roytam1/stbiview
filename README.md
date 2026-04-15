@@ -5,10 +5,10 @@ A high-performance, lightweight image viewer specifically engineered for **Windo
 ## 🚀 Key Features
 
 * **Fixed-Point Dithering:** Custom **Floyd-Steinberg** algorithm with [Amanvir Parhar weights](https://amanvir.com/blog/writing-my-own-dithering-algorithm-in-racket) optimized for processors without an FPU (Floating Point Unit). 
-* **Color Cube LUT:** Uses a pre-computed 32x32x32 Look-Up Table to map colors instantly to VGA (16) or Web-Safe (216) palettes, avoiding expensive distance calculations.
+* **Color Cube LUT:** Uses a pre-computed 32x32x32 Look-Up Table to map colors instantly to VGA (16) or Win8-based (256) palettes, avoiding expensive distance calculations.
 * **Custom Generic 256 Color Palette:** Based on ["win8" palette](https://web.archive.org/web/20250227072942/https://eisbox.net/downloads/palettes/win-8.txt) with some modifications on both palette and `FindClosestColor` function.
 * **Universal Format Support:**
-    * **Modern:** QOI (Quite OK Image), WebP, JPG, PNG, GIF (without animation), BMP.
+    * **Modern:** QOI (Quite OK Image), WebP, JPEG XL, JPG, PNG, GIF (without animation), BMP.
     * **Retro/Unix:** PCX, TGA, PNM, PGM, PPM, XBM (X-BitMap) and XPM (X-PixMap).
 * **Smooth Drag-to-Scroll:** An "Acrobat-style" Hand Tool for panning large images, utilizing `SetCapture` and `ScrollWindowEx` for tear-free movement.
 * **Architecture-Aware Rendering:**
@@ -19,17 +19,19 @@ A high-performance, lightweight image viewer specifically engineered for **Windo
 
 ### The "486SX" Pipeline
 On a 486SX, every clock cycle counts. The image processing pipeline follows these strict rules:
-1.  **Integer Only:** All scaling, dithering, and color conversion use bit-shifting (`>>`) instead of division.
+1.  **Integer Only:** All scaling, dithering, and color conversion use bit-shifting (`>>`) instead of division. (Not applicable to external libraries like j40)
 2.  **Bottom-Up DIBs:** Images are stored in memory in the native Windows Bottom-Up format to ensure compatibility with the strictest Win32s display drivers.
 3.  **Palette Realization:** Full support for `WM_QUERYNEWPALETTE` and `WM_PALETTECHANGED` to ensure color accuracy on 256-color (8-bit) SVGA displays.
 
 ### Performance Comparisons
-| Format | Decoding Speed (486SX) | Why? |
-| :--- | :--- | :--- |
-| **QOI** | ⚡ Extremely Fast | Byte-matching opcodes, no complex math. |
-| **XBM** | ⚡ Fast | Simple hex string parsing. |
-| **BMP** | ✅ Fast | Zero processing required. |
-| **JPG** , **WebP** | 🐢 Slow | Heavy IDCT math (emulated on SX). |
+| Format | Decoding Speed (486SX) | Why? | Powered by |
+| :--- | :--- | :--- | :--- |
+| **QOI** | ⚡ Extremely Fast | Byte-matching opcodes, no complex math. | Internal function |
+| **XBM** | ⚡ Fast | Simple hex string parsing. | Internal function |
+| **BMP** | ✅ Fast | Zero processing required. | stb_image |
+| **PNG** | 🐢 Slow | Complex zlib decompression and PNG filters. | stb_image |
+| **JPG** , **WebP** | 🐢 Slow | Heavy IDCT math (emulated on SX). | stb_image, simplewebp |
+| **JPEG XL** | 🐢 Slow | Lots of floating point operations. | j40 |
 
 ## ⌨️ Controls
 
@@ -50,8 +52,9 @@ On a 486SX, every clock cycle counts. The image processing pipeline follows thes
 2.  **Memory Model:** Must be compiled as a **Win32 Target**.
 3.  **Dependencies:**
     * `stb_image.h` (for JPG/PNG support)
-    * `simplewebp.h`
     * `dr_pcx.h`
+    * `simplewebp.h`
+    * `j40.h`
     * `GDI32.lib`, `USER32.lib`, `COMDLG32.lib`
 
 ## 📝 Limitations & Notes

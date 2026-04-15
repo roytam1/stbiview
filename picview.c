@@ -934,6 +934,7 @@ TrySTB:
     if (!pSrc || !imgW || !imgH) {
         wsprintf(errBuf, "Failed to load:\n%s", filePath);
         MessageBox(hwnd, errBuf, "Error", MB_ICONERROR);
+        *filePath = 0; // clean filename buffer
         return;
     }
     // 2. Calculate GDI Stride (DWORD Aligned)
@@ -1387,7 +1388,7 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam) 
             ptLastMouse.x = (short)LOWORD(lParam);
             ptLastMouse.y = (short)HIWORD(lParam);
             SetCapture(hwnd); // Keep tracking mouse even if it leaves the window
-            SetCursor(LoadCursor(NULL, IDC_SIZEALL)); // Change cursor to a move icon
+            SetCursor(LoadCursor(NULL, IDC_SIZE)); // Change cursor to a move icon
             return 0;
 
         case WM_LBUTTONUP:

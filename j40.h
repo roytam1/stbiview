@@ -3290,7 +3290,7 @@ J40__STATIC_RETURNS_ERR j40__image_metadata(j40__st *st) {
 			// TODO: should verify cspace grayness with ICC grayness
 			if (!im->want_icc) {
 				if (cspace != CS_XYB) {
-					static const float E[2] = {0.33333333f, 0.33333333f}, DCI[2] = {0.314f, 0.351f},
+					static const float E[2] = {1/3.f, 1/3.f}, DCI[2] = {0.314f, 0.351f},
 						BT2100[3][2] = {{0.708f, 0.292f}, {0.170f, 0.797f}, {0.131f, 0.046f}},
 						P3[3][2] = {{0.680f, 0.320f}, {0.265f, 0.690f}, {0.150f, 0.060f}};
 					switch (j40__enum(st)) {
@@ -5273,14 +5273,14 @@ J40__STATIC_RETURNS_ERR j40__frame_header(j40__st *st) {
 	f->epf.border_sad_mul = 2.0f / 3.0f;
 	f->epf.sigma_for_modular = 1.0f;
 	// TODO spec bug: default values for m_*_lf_unscaled should be reciprocals of the listed values
-	f->m_lf_scaled[0] = 0.000244140625f; //1.0f / 4096.0f;
+	f->m_lf_scaled[0] = 1.0f / 4096.0f;
 	f->m_lf_scaled[1] = 1.0f / 512.0f;
 	f->m_lf_scaled[2] = 1.0f / 256.0f;
 	f->global_tree = NULL;
 	memset(&f->global_codespec, 0, sizeof(j40__code_spec));
 	memset(&f->gmodular, 0, sizeof(j40__modular));
 	f->block_ctx_map = NULL;
-	f->inv_colour_factor = 0.011904762127f; //1 / 84.0f;
+	f->inv_colour_factor = 1 / 84.0f;
 	f->x_factor_lf = 0;
 	f->b_factor_lf = 0;
 	f->base_corr_x = 0.0f;

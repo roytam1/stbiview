@@ -4881,7 +4881,7 @@ J40_STATIC void j40__dct_quant_weights(
 	int32_t x, y, c;
 	for (c = 0; c < 3; ++c) {
 		for (y = 0; y < rows; ++y) for (x = 0; x < columns; ++x) {
-			static const float INV_SQRT2 = 0.707106232643f; //1.0f / 1.414214562373095f; // 1/(sqrt(2) + 1e-6)
+			static const float INV_SQRT2 = 1.0f / 1.414214562373095f; // 1/(sqrt(2) + 1e-6)
 			float d = (float)hypot((float) x * inv_columns_m1, (float) y * inv_rows_m1);
 			// TODO spec issue: num_bands doesn't exist (probably len)
 			out[y * columns + x][c] = j40__interpolate(d * INV_SQRT2, c, bands, len);
@@ -5270,17 +5270,17 @@ J40__STATIC_RETURNS_ERR j40__frame_header(j40__st *st) {
 	f->epf.quant_mul = 0.46f;
 	f->epf.pass0_sigma_scale = 0.9f;
 	f->epf.pass2_sigma_scale = 6.5f;
-	f->epf.border_sad_mul = 0.666666686535f;//2.0f / 3.0f;
+	f->epf.border_sad_mul = 2.0f / 3.0f;
 	f->epf.sigma_for_modular = 1.0f;
 	// TODO spec bug: default values for m_*_lf_unscaled should be reciprocals of the listed values
-	f->m_lf_scaled[0] = 0.000244140625f;//1.0f / 4096.0f;
-	f->m_lf_scaled[1] = 0.001953125f;//1.0f / 512.0f;
-	f->m_lf_scaled[2] = 0.00390625f;//1.0f / 256.0f;
+	f->m_lf_scaled[0] = 0.000244140625f; //1.0f / 4096.0f;
+	f->m_lf_scaled[1] = 1.0f / 512.0f;
+	f->m_lf_scaled[2] = 1.0f / 256.0f;
 	f->global_tree = NULL;
 	memset(&f->global_codespec, 0, sizeof(j40__code_spec));
 	memset(&f->gmodular, 0, sizeof(j40__modular));
 	f->block_ctx_map = NULL;
-	f->inv_colour_factor = 0.011904762127f;//1 / 84.0f;
+	f->inv_colour_factor = 0.011904762127f; //1 / 84.0f;
 	f->x_factor_lf = 0;
 	f->b_factor_lf = 0;
 	f->base_corr_x = 0.0f;
@@ -7296,7 +7296,7 @@ J40__STATIC_RETURNS_ERR j40__combine_vardct_from_lf_group(j40__st *st, const j40
 						samples[1][p] * im->opsin_inv_mat[c][1] +
 						samples[2][p] * im->opsin_inv_mat[c][2];
 					// TODO very, very slow; probably different approximations per bpp ranges may be needed
-					v = (v <= 0.0031308f ? 12.92f * v : 1.055f * (float)pow(v, 0.416666656733f/*1.0f / 2.4f*/) - 0.055f); // to sRGB
+					v = (v <= 0.0031308f ? 12.92f * v : 1.055f * (float)pow(v, 1.0f / 2.4f) - 0.055f); // to sRGB
 					// TODO overflow check
 					pixels[gg->left + x] = (int16_t) ((float) ((1 << im->bpp) - 1) * v + 0.5f);
 				}

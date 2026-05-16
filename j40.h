@@ -109,6 +109,8 @@ int main(int argc, char **argv) {
     #define INT64_MAX ((int64_t)0x7FFFFFFFFFFFFFFFi64)
     #define INT64_MIN ((int64_t)0x8000000000000000i64)
     #define UINT64_MAX ((uint64_t)0xFFFFFFFFFFFFFFFFi64)
+    #define J40_UINT64_VALUE(x) x ## ui64
+    #define J40_INT64_VALUE(x) x ## i64
     #define snprintf _snprintf
     #if defined(_WIN64)
         #define SIZE_MAX UINT64_MAX
@@ -119,6 +121,8 @@ int main(int argc, char **argv) {
     #endif
 #else
     #include <stdint.h>
+    #define J40_UINT64_VALUE(x) x ## ULL
+    #define J40_INT64_VALUE(x) x ## LL
 #endif
 
 #ifdef J40_IMPLEMENTATION
@@ -134,23 +138,6 @@ int main(int argc, char **argv) {
 	#ifndef J40__EXPOSE_INTERNALS
 		#define J40__EXPOSE_INTERNALS
 	#endif
-#endif
-
-/* move math related defines lower */
-#if defined(_MSC_VER) && (_MSC_VER <= 1800)
-    #define isfinite _finite
-    //#define cbrtf(x) (float)pow(x,(double)1/3)
-    double cbrt(double x) {
-        double y = 1.0/3.0;
-        if (x < 0)
-            return -1.0 * pow(-1.0*x, y);
-        else
-            return pow(x, y);
-    }
-    #define cbrtf(x) (float)cbrt(x)
-
-    #undef hypot
-    #define hypot(x,y) sqrt((x)*(x)+(y)*(y))
 #endif
 
 
@@ -655,6 +642,135 @@ J40_ALWAYS_INLINE int j40__surely_nonzero(float x);
 
 #ifdef J40_IMPLEMENTATION
 
+typedef union _J40_IFLOAT {
+    double d;
+    float f[2];
+    unsigned __int64 s;
+    unsigned int i[2];
+} j40_ifloat;
+
+float j40_U32_to_float(unsigned int i) {
+    j40_ifloat intf;
+    intf.i[0]=i;
+    return intf.f[0];
+}
+
+// based on gemini generated double to float function
+float j40_dbl2f(double d) {
+#ifndef _M_ALPHA
+    return d;
+#else
+    j40_ifloat pun, res;
+    uint64_t frac, full_frac;
+    uint32_t sign, res_exp, res_frac, shift;
+    int32_t exp, new_exp;
+    int G, R, S;
+
+    pun.d = d;
+    // 1. Extract Components
+    sign = (uint32_t)((pun.s >> 32) & 0x80000000);
+    exp = (int32_t)((pun.s >> 52) & 0x7FF);
+    frac = pun.s & J40_INT64_VALUE(0x000FFFFFFFFFFFFF);
+    res_exp = 0;
+    res_frac = 0;
+
+    // 2. Handle Infinity and NaN
+    if (exp == 0x7FF) {
+        res_exp = 0xFF;
+        // If NaN, keep high bits of frac; ensure it's not 0 to maintain NaN status
+        res_frac = (frac == 0) ? 0 : (uint32_t)(frac >> 29) | 0x400000;
+        res.i[0] = sign | (res_exp << 23) | res_frac;
+        return res.f[0];
+    }
+
+    // 3. Handle Zero and extremely small doubles
+    // The smallest possible subnormal float is ~1.4e-45. 
+    // Any double smaller than that (including all double subnormals) is 0.
+    if (exp < (1023 - 126 - 24)) {
+        res.i[0] = sign; 
+        return res.f[0];
+    }
+
+    // 4. Calculate New Exponent and Mantissa Shifting
+    new_exp = exp - 1023 + 127;
+    full_frac = frac | J40_INT64_VALUE(0x0010000000000000); // Add hidden bit
+    shift = 29;
+
+    // Handle Underflow (conversion to Subnormal Float)
+    if (new_exp <= 0) {
+        shift = 29 + (1 - new_exp);
+        new_exp = 0;
+    }
+
+    // 5. GRS Rounding Logic (Guard, Round, Sticky)
+    // We need to determine these bits before we perform the final shift
+    if (shift < 64) {
+        G = (shift > 0) ? (full_frac >> (shift)) & 1 : 0;
+        R = (shift > 0) ? (full_frac >> (shift - 1)) & 1 : 0;
+        S = (shift > 1) ? (full_frac & ((J40_UINT64_VALUE(1) << (shift - 1)) - 1)) != 0 : 0;
+
+        res_frac = (uint32_t)(full_frac >> shift);
+
+        // Round to nearest even
+        if (R && (G || S)) {
+            res_frac++;
+        }
+    } else {
+        res_frac = 0; // Completely shifted out
+    }
+
+    // 6. Handle Mantissa Overflow from Rounding
+    // If rounding bumped the mantissa to 2^23, it carries into the exponent
+    if (res_frac & 0x01000000) {
+        res_frac >>= 1;
+        new_exp++;
+    } 
+    // Special case for subnormals that rounded up into a normal number
+    else if (new_exp == 0 && (res_frac & 0x00800000)) {
+        new_exp = 1;
+    }
+
+    // 7. Final Overflow Check (to Infinity)
+    if (new_exp >= 0xFF) {
+        res.i[0] = sign | 0x7F800000; 
+        return res.f[0];
+    }
+
+    res_exp = (uint32_t)new_exp;
+
+    // Mask the fraction to 23 bits (removes the hidden bit for normal numbers)
+    res.i[0] = sign | (res_exp << 23) | (res_frac & 0x7FFFFF);
+    return res.f[0];
+#endif
+}
+
+/* move math related defines lower */
+double j40_pow(double base, double expon) {
+#ifdef _M_ALPHA
+    return exp(expon * log(base));
+#else
+    return pow(base, exp);
+#endif
+}
+
+#if defined(_MSC_VER) && (_MSC_VER <= 1800)
+    #define isfinite _finite
+
+    //#define cbrtf(x) (float)pow(x,(double)1/3)
+    double cbrt(double x) {
+        double y = 1.0/3.0;
+        if (x < 0)
+            return -1.0 * j40_pow(-1.0*x, y);
+        else
+            return j40_pow(x, y);
+    }
+    #define cbrtf(x) j40_dbl2f(cbrt(x))
+
+    #undef hypot
+    #define hypot(x,y) sqrt((x)*(x)+(y)*(y))
+#endif
+
+
 J40_ALWAYS_INLINE int32_t j40__unpack_signed(int32_t x) {
 	return (int32_t) (x & 1 ? -(x / 2 + 1) : x / 2);
 }
@@ -671,7 +787,8 @@ J40_ALWAYS_INLINE float j40__maxf(float x, float y) { return (x > y ? x : y); }
 
 // used to guard against division by zero
 J40_ALWAYS_INLINE int j40__surely_nonzero(float x) {
-	return isfinite(x) && fabs(x) >= 1e-8f;
+	float one_e8 = j40_U32_to_float(0x322bcc77);
+	return isfinite(x) && j40_dbl2f(fabs(x)) >= one_e8;
 }
 
 #ifdef _MSC_VER // required for j40__floor/ceil_lgN implementations
@@ -2054,7 +2171,7 @@ J40_INLINE float j40__f16(j40__st *st) {
 	int32_t bits = j40__u(st, 16);
 	int32_t biased_exp = (bits >> 10) & 0x1f;
 	if (biased_exp == 31) return J40__ERR("!fin"), 0.0f;
-	return (bits >> 15 ? -1 : 1) * (float)ldexp((float) ((bits & 0x3ff) | (biased_exp > 0 ? 0x400 : 0)), biased_exp - 25);
+	return (bits >> 15 ? -1 : 1) * j40_dbl2f(ldexp(j40_dbl2f((bits & 0x3ff) | (biased_exp > 0 ? 0x400 : 0)), biased_exp - 25));
 }
 
 J40_INLINE int32_t j40__u8(j40__st *st) { // ANS distribution decoding only
@@ -3146,8 +3263,9 @@ J40__ON_ERROR:
 }
 
 J40__STATIC_RETURNS_ERR j40__customxy(j40__st *st, float xy[2]) {
-	xy[0] = (float)j40__unpack_signed(j40__u32(st, 0, 19, 0x80000, 19, 0x100000, 20, 0x200000, 21)) / 100000.0f;
-	xy[1] = (float)j40__unpack_signed(j40__u32(st, 0, 19, 0x80000, 19, 0x100000, 20, 0x200000, 21)) / 100000.0f;
+	float f100000 = j40_U32_to_float(0x47c35000);
+	xy[0] = (float)j40__unpack_signed(j40__u32(st, 0, 19, 0x80000, 19, 0x100000, 20, 0x200000, 21)) / f100000;
+	xy[1] = (float)j40__unpack_signed(j40__u32(st, 0, 19, 0x80000, 19, 0x100000, 20, 0x200000, 21)) / f100000;
 	return st->err;
 }
 
@@ -3168,18 +3286,37 @@ J40__ON_ERROR:
 }
 
 J40__STATIC_RETURNS_ERR j40__image_metadata(j40__st *st) {
-	static const float SRGB_CHROMA[4][2] = { // default chromacity (kD65, kSRGB)
+	static /*const*/ float SRGB_CHROMA[4][2];/* = { // default chromacity (kD65, kSRGB)
 		{0.3127f, 0.3290f}, {0.639998686f, 0.330010138f},
 		{0.300003784f, 0.600003357f}, {0.150002046f, 0.059997204f},
-	};
-	static const float OPSIN_INV_MAT[3][3] = { // default opsin inverse matrix
+	};*/
+	static /*const*/ float OPSIN_INV_MAT[3][3];/* = { // default opsin inverse matrix
 		{11.031566901960783f, -9.866943921568629f, -0.16462299647058826f},
 		{-3.254147380392157f, 4.418770392156863f, -0.16462299647058826f},
 		{-3.6588512862745097f, 2.7129230470588235f, 1.9459282392156863f},
-	};
+	};*/
 
 	j40__image_st *im = st->image;
 	int32_t i, j;
+
+	SRGB_CHROMA[0][0] = j40_U32_to_float(0x3ea01a37);
+	SRGB_CHROMA[0][1] = j40_U32_to_float(0x3ea872b0);
+	SRGB_CHROMA[1][0] = j40_U32_to_float(0x3f23d6f4);
+	SRGB_CHROMA[1][1] = j40_U32_to_float(0x3ea8f717);
+	SRGB_CHROMA[2][0] = j40_U32_to_float(0x3e999a19);
+	SRGB_CHROMA[2][1] = j40_U32_to_float(0x3f1999d2);
+	SRGB_CHROMA[3][0] = j40_U32_to_float(0x3e199a23);
+	SRGB_CHROMA[3][1] = j40_U32_to_float(0x3d75bfa1);
+
+	OPSIN_INV_MAT[0][0] = j40_U32_to_float(0x4130814c);
+	OPSIN_INV_MAT[0][1] = j40_U32_to_float(0xc11ddf01);
+	OPSIN_INV_MAT[0][2] = j40_U32_to_float(0xbe2892ee);
+	OPSIN_INV_MAT[1][0] = j40_U32_to_float(0xc05043f3);
+	OPSIN_INV_MAT[1][1] = j40_U32_to_float(0x408d6691);
+	OPSIN_INV_MAT[1][2] = j40_U32_to_float(0xbe2892ee);
+	OPSIN_INV_MAT[2][0] = j40_U32_to_float(0xc06a2a9f);
+	OPSIN_INV_MAT[2][1] = j40_U32_to_float(0x402da088);
+	OPSIN_INV_MAT[2][2] = j40_U32_to_float(0x3ff9142d);
 
 	im->orientation = J40__ORIENT_TL;
 	im->intr_width = 0;
@@ -3196,17 +3333,17 @@ J40__STATIC_RETURNS_ERR j40__image_metadata(j40__st *st) {
 	memcpy(im->cpoints, SRGB_CHROMA, sizeof SRGB_CHROMA);
 	im->gamma_or_tf = J40__TF_SRGB;
 	im->render_intent = J40__INTENT_REL;
-	im->intensity_target = 255.0f;
+	im->intensity_target = j40_U32_to_float(0x437f0000);
 	im->min_nits = 0.0f;
 	im->linear_below = 0.0f;
 	im->modular_16bit_buffers = 1;
 	im->xyb_encoded = 1;
 	memcpy(im->opsin_inv_mat, OPSIN_INV_MAT, sizeof OPSIN_INV_MAT);
-	im->opsin_bias[0] = im->opsin_bias[1] = im->opsin_bias[2] = -0.0037930732552754493f;
-	im->quant_bias[0] = 1.0f - 0.05465007330715401f;
-	im->quant_bias[1] = 1.0f - 0.07005449891748593f;
-	im->quant_bias[2] = 1.0f - 0.049935103337343655f;
-	im->quant_bias_num = 0.145f;
+	im->opsin_bias[0] = im->opsin_bias[1] = im->opsin_bias[2] = j40_U32_to_float(0xbb789536);
+	im->quant_bias[0] = j40_U32_to_float(0x3f720274);
+	im->quant_bias[1] = j40_U32_to_float(0x3f6e10e8);
+	im->quant_bias[2] = j40_U32_to_float(0x3f733774);
+	im->quant_bias_num = j40_U32_to_float(0x3e147ae1);
 
 	J40__TRY(j40__size_header(st, &im->width, &im->height));
 	J40__SHOULD(im->width <= st->limits->width && im->height <= st->limits->height, "slim");
@@ -3290,9 +3427,25 @@ J40__STATIC_RETURNS_ERR j40__image_metadata(j40__st *st) {
 			// TODO: should verify cspace grayness with ICC grayness
 			if (!im->want_icc) {
 				if (cspace != CS_XYB) {
-					static const float E[2] = {0.33333333f, 0.33333333f}, DCI[2] = {0.314f, 0.351f},
-						BT2100[3][2] = {{0.708f, 0.292f}, {0.170f, 0.797f}, {0.131f, 0.046f}},
-						P3[3][2] = {{0.680f, 0.320f}, {0.265f, 0.690f}, {0.150f, 0.060f}};
+					static /*const*/ float E[2]/* = {0.33333333f, 0.33333333f}*/, DCI[2]/* = {0.314f, 0.351f}*/,
+						BT2100[3][2]/* = {{0.708f, 0.292f}, {0.170f, 0.797f}, {0.131f, 0.046f}}*/,
+						P3[3][2]/* = {{0.680f, 0.320f}, {0.265f, 0.690f}, {0.150f, 0.060f}}*/;
+						E[0] = E[1] = j40_U32_to_float(0x3eaaaaab);
+						DCI[0] = j40_U32_to_float(0x3ea0c49c);
+						DCI[1] = j40_U32_to_float(0x3eb3b646);
+						BT2100[0][0] = j40_U32_to_float(0x3f353f7d);
+						BT2100[0][1] = j40_U32_to_float(0x3e958106);
+						BT2100[1][0] = j40_U32_to_float(0x3e2e147b);
+						BT2100[1][1] = j40_U32_to_float(0x3f4c0831);
+						BT2100[2][0] = j40_U32_to_float(0x3e0624dd);
+						BT2100[2][1] = j40_U32_to_float(0x3d3c6a7f);
+						P3[0][0] = j40_U32_to_float(0x3f2e147b);
+						P3[0][1] = j40_U32_to_float(0x3ea3d70a);
+						P3[1][0] = j40_U32_to_float(0x3e87ae14);
+						P3[1][1] = j40_U32_to_float(0x3f30a3d7);
+						P3[2][0] = j40_U32_to_float(0x3e19999a);
+						P3[2][1] = j40_U32_to_float(0x3d75c28f);
+
 					switch (j40__enum(st)) {
 					case WP_D65: break; // default
 					case WP_CUSTOM: J40__TRY(j40__customxy(st, im->cpoints[J40__CHROMA_WHITE])); break;
@@ -3344,7 +3497,7 @@ J40__STATIC_RETURNS_ERR j40__image_metadata(j40__st *st) {
 				im->linear_below = j40__f16(st);
 				if (relative_to_max_display) {
 					J40__SHOULD(0 <= im->linear_below && im->linear_below <= 1, "tone");
-					im->linear_below *= -1.0f;
+					im->linear_below *= j40_U32_to_float(0xbf800000);//-1.0f;
 				} else {
 					J40__SHOULD(0 <= im->linear_below, "tone");
 				}
@@ -4693,7 +4846,7 @@ static const struct j40__dct_params {
 	{-0.65012f, -0.35660379990111464f, -0.8f}, {-0.19041574084286472f, -0.3443074455424403f, -0.7f}, \
 	{-0.20819395464f, -0.33699592683512467f, -0.7f}, {-0.421064f, -0.30180866526242109f, -0.4f}, \
 	{-0.32733845535848671f, -0.27321683125358037f, -0.5f} // (8)
-static const float J40__LIBRARY_DCT_PARAMS[129][4] = {
+static float J40__LIBRARY_DCT_PARAMS[129][4];/* = {
 	// DCT33 dct_params (n=6) (SPEC some values are incorrect)
 	{3150.0f, 560.0f, 512.0f}, {0.0f, 0.0f, -2.0f}, {-0.4f, -0.3f, -1.0f},
 	{-0.4f, -0.3f, 0.0f}, {-0.4f, -0.3f, -1.0f}, {-2.0f, -0.3f, -2.0f},
@@ -4753,6 +4906,51 @@ static const float J40__LIBRARY_DCT_PARAMS[129][4] = {
 	J40__LARGE_DCT_PARAMS(1.3f), // DCT67 dct_params (n=8)
 	J40__LARGE_DCT_PARAMS(3.6f), // DCT88 dct_params (n=8)
 	J40__LARGE_DCT_PARAMS(2.6f), // DCT78 dct_params (n=8)
+};*/
+
+static uint32_t J40__LIBRARY_DCT_PARAMS_INT[516] = {
+0x4544e000,0x440c0000,0x44000000,0x0,0x0,0x0,0xc0000000,0x0,0xbecccccd,0xbe99999a,0xbf800000,0x0,0xbecccccd,
+0xbe99999a,0x0,0x0,0xbecccccd,0xbe99999a,0xbf800000,0x0,0xc0000000,0xbe99999a,0xc0000000,0x0,0x438c0000,
+0x42700000,0x41900000,0x0,0x45458000,0x44580000,0x43480000,0x0,0x45458000,0x44580000,0x43480000,0x0,
+0x45700000,0x44700000,0x44200000,0x0,0x45200000,0x44200000,0x43a00000,0x0,0x44a00000,0x43a00000,0x43000000,
+0x0,0x44200000,0x43340000,0x42800000,0x0,0x43f00000,0x430c0000,0x42000000,0x0,0x43960000,0x42f00000,0x41800000,
+0x0,0x3f800000,0x3f800000,0x3f800000,0x0,0x3f800000,0x3f800000,0x3f800000,0x0,0x45098000,0x43c40000,0x42e00000,
+0x0,0x0,0x0,0xbe800000,0x0,0x0,0x0,0xbe800000,0x0,0x0,0x0,0xbf000000,0x0,0x460c937e,0x454777bd,0x4490b021,0x0,
+0xbfa668f3,0xbf2c9b60,0xc00366af,0x0,0xbefd0db8,0xbf4eb594,0xbfb33333,0x0,0xbee0d0e6,0xbee60532,0xbf01c251,0x0,
+0xbf229007,0xbeb7a18d,0xbedaab30,0x0,0xbf66da92,0xbea05ee2,0xbfbe2ae0,0x0,0xbfcedff7,0xbec096c4,0xc09d7821,0x0,
+0x467599a2,0x45e44e1c,0x456db882,0x0,0xbf833333,0xbf4ddfc7,0xc043e30f,0x0,0xbf7ae148,0xbf4367de,0xc002a51a,0x0,
+0xbf66b50b,0xbf0e7d96,0xc0018217,0x0,0xbecccccd,0xbefee698,0xbf0cae96,0x0,0xbef9f48f,0xbedfbdee,0xbecccccd,0x0,
+0xbed795b3,0xbecdb9de,0xbecccccd,0x0,0xbe8a3d71,0xbe8be314,0xbe99999a,0x0,0x45e24630,0x44b504f3,0x43fd6d54,0x0,
+0xbf333333,0xbf000000,0xbfb33333,0x0,0xbf333333,0xbf000000,0xbe4ccccd,0x0,0xbe4ccccd,0xbf000000,0xbf000000,0x0,
+0xbe4ccccd,0xbe4ccccd,0xbf000000,0x0,0xbe4ccccd,0xbe4ccccd,0xbfc00000,0x0,0xbf000000,0xbe4ccccd,0xc0666666,0x0,
+0x467e6cff,0x459f0943,0x45545c6b,0x0,0xbfe40122,0xbea3dd84,0xbea48505,0x0,0xbfd0c186,0xbeb50ecb,0xbeb0add4,0x0,
+0xbf84e453,0xbe9b573f,0xbf341206,0x0,0xbf59999a,0xbf1c28f6,0xbf666666,0x0,0xbf333333,0xbf000000,0xbf800000,0x0,
+0xbf666666,0xbf000000,0xbf800000,0x0,0xbf9e3757,0xbf19999a,0xbf96757e,0x0,0x465853e2,0x4595f7b6,0x44e1e795,0x0,
+0xbf789c80,0xbf1c7b15,0xbf99999a,0x0,0xbf2872b0,0xbf567406,0xbf99999a,0x0,0xbed72c52,0xbf4a472e,0xbf333333,0x0,
+0xbe689225,0xbe89de1e,0xbf333333,0x0,0xbe61e4f7,0xbec3f4e2,0xbf333333,0x0,0xbe676c8b,0xbe6abe79,0xbecccccd,0x0,
+0xbf19999a,0xbe5429e0,0xbf000000,0x0,0x3f800000,0x3f800000,0x3f800000,0x0,0x450960cf,0x443f1765,0x4403c6e2,0x0,
+0xbf767343,0xbf6d2221,0xbfbacee2,0x0,0xbf430eaa,0xbf77af96,0xbfb99c4a,0x0,0xbf27b58e,0xbe8e9161,0xbfcaccb6,0x0,
+0x45400000,0x44800000,0x43c00000,0x0,0x45400000,0x44800000,0x43c00000,0x0,0x43800000,0x42480000,0x41400000,0x0,
+0x43800000,0x42480000,0x41400000,0x0,0x43800000,0x42480000,0x41400000,0x0,0x43cf0000,0x42680000,0x41b00000,0x0,
+0x0,0x0,0xbe800000,0x0,0x0,0x0,0xbe800000,0x0,0x0,0x0,0xbe800000,0x0,0x450960cf,0x443f1765,0x4403c6e2,0x0,
+0xbf767343,0xbf6d2221,0xbfbacee2,0x0,0xbf430eaa,0xbf77af96,0xbfb99c4a,0x0,0xbf27b58e,0xbe8e9161,0xbfcaccb6,0x0,
+0x45098000,0x43c40000,0x42e00000,0x0,0x0,0x0,0xbe800000,0x0,0x0,0x0,0xbe800000,0x0,0x0,0x0,0xbf000000,0x0,
+0x46a62455,0x45f23188,0x457cb061,0x0,0xbf833333,0xbe9bbf8e,0xbf99999a,0x0,0xbf47ae14,0x3eba02ef,0xbf99999a,0x0,
+0xbf266e44,0xbeb694c6,0xbf4ccccd,0x0,0xbe42fc58,0xbeb04911,0xbf333333,0x0,0xbe5530cc,0xbeac8abb,0xbf333333,0x0,
+0xbed795b3,0xbe9a86aa,0xbecccccd,0x0,0xbea798e8,0xbe8be314,0xbf000000,0x0,0x466ffb97,0x45aeeae2,0x45367f62,0x0,
+0xbf833333,0xbe9bbf8e,0xbf99999a,0x0,0xbf47ae14,0x3eba02ef,0xbf99999a,0x0,0xbf266e44,0xbeb694c6,0xbf4ccccd,0x0,
+0xbe42fc58,0xbeb04911,0xbf333333,0x0,0xbe5530cc,0xbeac8abb,0xbf333333,0x0,0xbed795b3,0xbe9a86aa,0xbecccccd,0x0,
+0xbea798e8,0xbe8be314,0xbf000000,0x0,0x47262455,0x46723188,0x45fcb061,0x0,0xbf833333,0xbe9bbf8e,0xbf99999a,0x0,
+0xbf47ae14,0x3eba02ef,0xbf99999a,0x0,0xbf266e44,0xbeb694c6,0xbf4ccccd,0x0,0xbe42fc58,0xbeb04911,0xbf333333,0x0,
+0xbe5530cc,0xbeac8abb,0xbf333333,0x0,0xbed795b3,0xbe9a86aa,0xbecccccd,0x0,0xbea798e8,0xbe8be314,0xbf000000,0x0,
+0x46effb97,0x462eeae2,0x45b67f62,0x0,0xbf833333,0xbe9bbf8e,0xbf99999a,0x0,0xbf47ae14,0x3eba02ef,0xbf99999a,0x0,
+0xbf266e44,0xbeb694c6,0xbf4ccccd,0x0,0xbe42fc58,0xbeb04911,0xbf333333,0x0,0xbe5530cc,0xbeac8abb,0xbf333333,0x0,
+0xbed795b3,0xbe9a86aa,0xbecccccd,0x0,0xbea798e8,0xbe8be314,0xbf000000,0x0,0x47a62455,0x46f23188,0x467cb061,0x0,
+0xbf833333,0xbe9bbf8e,0xbf99999a,0x0,0xbf47ae14,0x3eba02ef,0xbf99999a,0x0,0xbf266e44,0xbeb694c6,0xbf4ccccd,0x0,
+0xbe42fc58,0xbeb04911,0xbf333333,0x0,0xbe5530cc,0xbeac8abb,0xbf333333,0x0,0xbed795b3,0xbe9a86aa,0xbecccccd,0x0,
+0xbea798e8,0xbe8be314,0xbf000000,0x0,0x476ffb97,0x46aeeae2,0x46367f62,0x0,0xbf833333,0xbe9bbf8e,0xbf99999a,0x0,
+0xbf47ae14,0x3eba02ef,0xbf99999a,0x0,0xbf266e44,0xbeb694c6,0xbf4ccccd,0x0,0xbe42fc58,0xbeb04911,0xbf333333,0x0,
+0xbe5530cc,0xbeac8abb,0xbf333333,0x0,0xbed795b3,0xbe9a86aa,0xbecccccd,0x0,0xbea798e8,0xbe8be314,0xbf000000,0x0
 };
 
 static const int8_t J40__LOG_ORDER_SIZE[J40__NUM_ORDERS][2] = {
@@ -4775,7 +4973,7 @@ J40__STATIC_RETURNS_ERR j40__read_dq_matrix(
 		denom = j40__f16(st);
 		// TODO spec bug: ZeroPadToByte isn't required at this point
 		J40__SHOULD(j40__surely_nonzero(denom), "dqm0");
-		inv_denom = 1.0f / denom;
+		inv_denom = j40_U32_to_float(0x3f800000) / denom;
 
 		w[0] = w[1] = w[2] = columns;
 		h[0] = h[1] = h[2] = rows;
@@ -4821,12 +5019,12 @@ J40__STATIC_RETURNS_ERR j40__read_dq_matrix(
 		if (paramsize) {
 			J40__TRY_MALLOC(j40_f32x4, &dqmat->params, (size_t) paramsize);
 			for (c = 0; c < 3; ++c) for (j = 0; j < how.nparams; ++j) {
-				dqmat->params[j][c] = j40__f16(st) * (j < how.nscaled ? 64.0f : 1.0f);
+				dqmat->params[j][c] = j40__f16(st) * (j < how.nscaled ? j40_U32_to_float(0x42800000) : j40_U32_to_float(0x3f800000));
 			}
 			for (i = 0; i < how.ndctparams; ++i) { // ReadDctParams
 				int32_t n = *(i == 0 ? &dqmat->n : &dqmat->m) = (int16_t) (j40__u(st, 4) + 1);
 				for (c = 0; c < 3; ++c) for (j = 0; j < n; ++j) {
-					dqmat->params[paramidx + j][c] = j40__f16(st) * (j == 0 ? 64.0f : 1.0f);
+					dqmat->params[paramidx + j][c] = j40__f16(st) * (j == 0 ? j40_U32_to_float(0x42800000) : j40_U32_to_float(0x3f800000));
 				}
 				paramidx += n;
 			}
@@ -4852,7 +5050,7 @@ J40_INLINE float j40__interpolate(float pos, int32_t c, const j40_f32x4 *bands, 
 	frac_idx = scaled_pos - (float) scaled_idx;
 	a = bands[scaled_idx][c];
 	b = bands[scaled_idx + 1][c];
-	return a * (float)pow(b / a, frac_idx);
+	return a * j40_dbl2f(j40_pow(b / a, frac_idx));
 }
 
 J40__STATIC_RETURNS_ERR j40__interpolation_bands(
@@ -4866,7 +5064,7 @@ J40__STATIC_RETURNS_ERR j40__interpolation_bands(
 		J40__SHOULD(out[0][c] > 0, "band");
 		for (i = 1; i < nparams; ++i) {
 			float v = params[i][c];
-			out[i][c] = v > 0 ? out[i - 1][c] * (1.0f + v) : out[i - 1][c] / (1.0f - v);
+			out[i][c] = v > 0 ? out[i - 1][c] * (j40_U32_to_float(0x3f800000) + v) : out[i - 1][c] / (j40_U32_to_float(0x3f800000) - v);
 			J40__SHOULD(out[i][c] > 0, "band");
 		}
 	}
@@ -4877,12 +5075,12 @@ J40__ON_ERROR:
 J40_STATIC void j40__dct_quant_weights(
 	int32_t rows, int32_t columns, const j40_f32x4 *bands, int32_t len, j40_f32x4 *out
 ) {
-	float inv_rows_m1 = 1.0f / (float) (rows - 1), inv_columns_m1 = 1.0f / (float) (columns - 1);
+	float inv_rows_m1 = j40_U32_to_float(0x3f800000) / (float) (rows - 1), inv_columns_m1 = j40_U32_to_float(0x3f800000) / (float) (columns - 1);
+	float INV_SQRT2 = j40_U32_to_float(0x3f3504ea)/*0.707106232643f*/; //1.0f / 1.414214562373095f; // 1/(sqrt(2) + 1e-6)
 	int32_t x, y, c;
 	for (c = 0; c < 3; ++c) {
 		for (y = 0; y < rows; ++y) for (x = 0; x < columns; ++x) {
-			static const float INV_SQRT2 = 0.707106232643f; //1.0f / 1.414214562373095f; // 1/(sqrt(2) + 1e-6)
-			float d = (float)hypot((float) x * inv_columns_m1, (float) y * inv_rows_m1);
+			float d = j40_dbl2f(hypot((float) x * inv_columns_m1, (float) y * inv_rows_m1));
 			// TODO spec issue: num_bands doesn't exist (probably len)
 			out[y * columns + x][c] = j40__interpolate(d * INV_SQRT2, c, bands, len);
 		}
@@ -4907,6 +5105,9 @@ J40__STATIC_RETURNS_ERR j40__load_dq_matrix(j40__st *st, int32_t idx, j40__dq_ma
 		mode = (enum j40__dq_matrix_mode) dct.def_mode;
 		n = dct.def_n;
 		m = dct.def_m;
+		if(!J40__LIBRARY_DCT_PARAMS[0][0]) {
+			memcpy(J40__LIBRARY_DCT_PARAMS,J40__LIBRARY_DCT_PARAMS_INT,sizeof(float)*129*4);
+		}
 		params = J40__LIBRARY_DCT_PARAMS + dct.def_offset;
 	} else {
 		n = dqmat->n;
@@ -4954,7 +5155,7 @@ J40__STATIC_RETURNS_ERR j40__load_dq_matrix(j40__st *st, int32_t idx, j40__dq_ma
 				4,4,4,4,5,5,5,5,
 			};
 			for (i = 0; i < 64; ++i) raw[i][c] = params[MAP[i]][c];
-			raw[0][c] = -1.0f;
+			raw[0][c] = j40_U32_to_float(0xbf800000);//-1.0f;
 		}
 		break;
 
@@ -4962,7 +5163,7 @@ J40__STATIC_RETURNS_ERR j40__load_dq_matrix(j40__st *st, int32_t idx, j40__dq_ma
 		J40__ASSERT(rows == 8 && columns == 8);
 		for (c = 0; c < 3; ++c) {
 			for (i = 0; i < 64; ++i) raw[i][c] = params[0][c];
-			raw[000][c] = 1.0f;
+			raw[000][c] = j40_U32_to_float(0x3f800000);//1.0f;
 			raw[001][c] = raw[010][c] = params[1][c];
 			raw[011][c] = params[2][c];
 		}
@@ -4983,7 +5184,26 @@ J40__STATIC_RETURNS_ERR j40__load_dq_matrix(j40__st *st, int32_t idx, j40__dq_ma
 		}
 		break;
 
-	case J40__DQ_ENC_AFV:
+	case J40__DQ_ENC_AFV:{
+		// TODO spec bug: this value can never be 1 because it will result in an out-of-bound
+		// access in j40__interpolate; libjxl avoids this by adding 1e-6 to the denominator
+		static float FREQS[12];/* = { // precomputed values of (freqs[i] - lo) / (hi - lo + 1e-6)
+			0.000000000f, 0.373436417f, 0.320380100f, 0.379332596f, 0.066671353f, 0.259756761f,
+			0.530035651f, 0.789731061f, 0.149436598f, 0.559318823f, 0.669198646f, 0.999999917f,
+		};*/
+		FREQS[0] = j40_U32_to_float(0);
+		FREQS[1] = j40_U32_to_float(0x3ebf330f);
+		FREQS[2] = j40_U32_to_float(0x3ea408dc);
+		FREQS[3] = j40_U32_to_float(0x3ec237e2);
+		FREQS[4] = j40_U32_to_float(0x3d888afe);
+		FREQS[5] = j40_U32_to_float(0x3e84fed7);
+		FREQS[6] = j40_U32_to_float(0x3f07b06b);
+		FREQS[7] = j40_U32_to_float(0x3f4a2bd1);
+		FREQS[8] = j40_U32_to_float(0x3e1905e8);
+		FREQS[9] = j40_U32_to_float(0x3f0f2f85);
+		FREQS[10] = j40_U32_to_float(0x3f2b509a);
+		FREQS[11] = j40_U32_to_float(0x3f7fffff);
+
 		J40__ASSERT(rows == 8 && columns == 8);
 		J40__ASSERT(n <= MAX_BANDS && m <= MAX_BANDS);
 		J40__TRY(j40__interpolation_bands(st, params + 9, n, bands));
@@ -4992,16 +5212,10 @@ J40__STATIC_RETURNS_ERR j40__load_dq_matrix(j40__st *st, int32_t idx, j40__dq_ma
 		j40__dct_quant_weights(4, 4, bands, m, scratch + 32);
 		J40__TRY(j40__interpolation_bands(st, params + 5, 4, bands));
 		for (c = 0; c < 3; ++c) {
-			// TODO spec bug: this value can never be 1 because it will result in an out-of-bound
-			// access in j40__interpolate; libjxl avoids this by adding 1e-6 to the denominator
-			static const float FREQS[12] = { // precomputed values of (freqs[i] - lo) / (hi - lo + 1e-6)
-				0.000000000f, 0.373436417f, 0.320380100f, 0.379332596f, 0.066671353f, 0.259756761f,
-				0.530035651f, 0.789731061f, 0.149436598f, 0.559318823f, 0.669198646f, 0.999999917f,
-			};
 			scratch[0][c] = params[0][c]; // replaces the top-left corner of weights4x8
 			scratch[32][c] = params[1][c]; // replaces the top-left corner of weights4x4
 			for (i = 0; i < 12; ++i) scratch[i + 48][c] = j40__interpolate(FREQS[i], c, bands, 4);
-			scratch[60][c] = 1.0f;
+			scratch[60][c] = j40_U32_to_float(0x3f800000);//1.0f;
 			for (i = 0; i < 3; ++i) scratch[i + 61][c] = params[i + 2][c];
 		}
 		for (c = 0; c < 3; ++c) {
@@ -5021,7 +5235,7 @@ J40__STATIC_RETURNS_ERR j40__load_dq_matrix(j40__st *st, int32_t idx, j40__dq_ma
 			for (i = 0; i < 64; ++i) raw[i][c] = scratch[MAP[i]][c];
 		}
 		break;
-
+	}
 	default: J40__UNREACHABLE();
 	}
 
@@ -5230,6 +5444,7 @@ J40__STATIC_RETURNS_ERR j40__frame_header(j40__st *st) {
 	j40__image_st *im = st->image;
 	j40__frame_st *f = st->frame;
 	int32_t i, j;
+	float f7 = j40_U32_to_float(0x40e00000);
 
 	f->is_last = 1;
 	f->type = J40__FRAME_REGULAR;
@@ -5260,31 +5475,31 @@ J40__STATIC_RETURNS_ERR j40__frame_header(j40__st *st) {
 	f->name_len = 0;
 	f->name = NULL;
 	f->gab.enabled = 1;
-	f->gab.weights[0][0] = f->gab.weights[1][0] = f->gab.weights[2][0] = 0.115169525f;
-	f->gab.weights[0][1] = f->gab.weights[1][1] = f->gab.weights[2][1] = 0.061248592f;
+	f->gab.weights[0][0] = f->gab.weights[1][0] = f->gab.weights[2][0] = j40_U32_to_float(0x3debde00);//0.115169525f;
+	f->gab.weights[0][1] = f->gab.weights[1][1] = f->gab.weights[2][1] = j40_U32_to_float(0x3d7adfce);//0.061248592f;
 	f->epf.iters = 2;
-	for (i = 0; i < 8; ++i) f->epf.sharp_lut[i] = (float) i / 7.0f;
-	f->epf.channel_scale[0] = 40.0f;
-	f->epf.channel_scale[1] = 5.0f;
-	f->epf.channel_scale[2] = 3.5f;
-	f->epf.quant_mul = 0.46f;
-	f->epf.pass0_sigma_scale = 0.9f;
-	f->epf.pass2_sigma_scale = 6.5f;
-	f->epf.border_sad_mul = 0.666666686535f;//2.0f / 3.0f;
-	f->epf.sigma_for_modular = 1.0f;
+	for (i = 0; i < 8; ++i) f->epf.sharp_lut[i] = (float) i / f7;
+	f->epf.channel_scale[0] = j40_U32_to_float(0x42200000);//40.0f;
+	f->epf.channel_scale[1] = j40_U32_to_float(0x40a00000);//5.0f;
+	f->epf.channel_scale[2] = j40_U32_to_float(0x40600000);//3.5f;
+	f->epf.quant_mul = j40_U32_to_float(0x3eeb851f);//0.46f;
+	f->epf.pass0_sigma_scale = j40_U32_to_float(0x3f666666);//0.9f;
+	f->epf.pass2_sigma_scale = j40_U32_to_float(0x40d00000);//6.5f;
+	f->epf.border_sad_mul = j40_U32_to_float(0x3f2aaaab);//0.666666686535f;//2.0f / 3.0f;
+	f->epf.sigma_for_modular = j40_U32_to_float(0x3f800000);//1.0f;
 	// TODO spec bug: default values for m_*_lf_unscaled should be reciprocals of the listed values
-	f->m_lf_scaled[0] = 0.000244140625f;//1.0f / 4096.0f;
-	f->m_lf_scaled[1] = 0.001953125f;//1.0f / 512.0f;
-	f->m_lf_scaled[2] = 0.00390625f;//1.0f / 256.0f;
+	f->m_lf_scaled[0] = j40_U32_to_float(0x39800000);//0.000244140625f;//1.0f / 4096.0f;
+	f->m_lf_scaled[1] = j40_U32_to_float(0x3b000000);//0.001953125f;//1.0f / 512.0f;
+	f->m_lf_scaled[2] = j40_U32_to_float(0x3b800000);//0.00390625f;//1.0f / 256.0f;
 	f->global_tree = NULL;
 	memset(&f->global_codespec, 0, sizeof(j40__code_spec));
 	memset(&f->gmodular, 0, sizeof(j40__modular));
 	f->block_ctx_map = NULL;
-	f->inv_colour_factor = 0.011904762127f;//1 / 84.0f;
+	f->inv_colour_factor = j40_U32_to_float(0x3c430c31);//0.011904762127f;//1 / 84.0f;
 	f->x_factor_lf = 0;
 	f->b_factor_lf = 0;
 	f->base_corr_x = 0.0f;
-	f->base_corr_b = 1.0f;
+	f->base_corr_b = j40_U32_to_float(0x3f800000);
 	f->dct_select_used = f->dct_select_loaded = 0;
 	f->order_used = f->order_loaded = 0;
 	memset(f->dq_matrix, 0, sizeof(f->dq_matrix));
@@ -5753,7 +5968,7 @@ J40_STATIC void j40__inverse_afv(float *buf, int flipx, int flipy);
 // SIAM Journal on Matrix Analysis and Applications, 39(2), 664--682.
 
 // [(1<<n) + k] = 1/(2 cos((k+0.5)/2^(n+1) pi)) for n >= 1 and 0 <= k < 2^n
-J40_STATIC const float J40__HALF_SECANTS[256] = {
+J40_STATIC float J40__HALF_SECANTS[256];/* = {
 	0, 0, // unused
 	0.54119610f, 1.30656296f, // n=1 for DCT-4
 	0.50979558f, 0.60134489f, 0.89997622f, 2.56291545f, // n=2 for DCT-8
@@ -5793,6 +6008,30 @@ J40_STATIC const float J40__HALF_SECANTS[256] = {
 	1.75804061f, 1.83404561f, 1.91722116f, 2.00861611f, 2.10949453f, 2.22139378f, 2.34620266f, 2.48626791f,
 	2.64454188f, 2.82479140f, 3.03189945f, 3.27231159f, 3.55471533f, 3.89110779f, 4.29853753f, 4.80207601f,
 	5.44016622f, 6.27490841f, 7.41356676f, 9.05875145f, 11.6446273f, 16.3000231f, 27.1639777f, 81.4878422f,
+};*/
+J40_STATIC uint32_t J40__HALF_SECANTS_INT[256] = {
+0x0,0x0,0x3f0a8bd4,0x3fa73d74,0x3f0281f7,0x3f19f1bd,0x3f6664d7,0x402406cf,0x3f009e8d,0x3f05c278,0x3f11233e,0x3f25961d,0x3f49c480,
+0x3f87c449,0x3fdc7926,0x40a33c9c,0x3f002785,0x3f01668b,0x3f03f45b,0x3f07f268,0x3f0d9838,0x3f153b3a,0x3f1f5c6e,0x3f2cc03d,0x3f3e99ee,
+0x3f56df9e,0x3f78fa3b,0x3f95b035,0x3fbdf91b,0x4003b2af,0x405a1642,0x41230a46,0x3f0009df,0x3f005907,0x3f00f84c,0x3f01e9a1,0x3f033005,
+0x3f04cf99,0x3f06cdc5,0x3f093163,0x3f0c02fa,0x3f0f4d13,0x3f131c9a,0x3f17816b,0x3f1c8f06,0x3f225d7c,0x3f290ab8,0x3f30bc3a,0x3f39a180,
+0x3f43f76d,0x3f500d3f,0x3f5e4bd7,0x3f6f40df,0x3f81d821,0x3f8e585d,0x3f9dee3b,0x3fb1d462,0x3fcc0749,0x3feff562,0x40120d1c,0x403b2d1d,
+0x4082b522,0x40d97efb,0x41a2fdb4,0x3f000278,0x3f001638,0x3f003dc8,0x3f007947,0x3f00c8e1,0x3f012cd7,0x3f01a575,0x3f02331d,0x3f02d63e,
+0x3f038f5e,0x3f045f12,0x3f054608,0x3f064503,0x3f075cdd,0x3f088e89,0x3f09db19,0x3f0b43bb,0x3f0cc9be,0x3f0e6e97,0x3f1033e2,0x3f121b66,
+0x3f14271e,0x3f165939,0x3f18b425,0x3f1b3a92,0x3f1def80,0x3f20d644,0x3f23f296,0x3f2748a0,0x3f2add09,0x3f2eb50d,0x3f32d693,0x3f374844,
+0x3f3c11af,0x3f413b6c,0x3f46cf4d,0x3f4cd897,0x3f536445,0x3f5a8162,0x3f624170,0x3f6ab8f0,0x3f74000f,0x3f7e337a,0x3f84babf,0x3f8af7ba,
+0x3f91e9d7,0x3f99affd,0x3fa27099,0x3fac5c00,0x3fb7afe3,0x3fc4bc39,0x3fd3ea96,0x3fe5c949,0x3ffb1cd9,0x400a7e49,0x401a8199,0x402ed346,
+0x40497005,0x406dc689,0x4091294c,0x40ba7c6c,0x4102762a,0x41595941,0x4222fa90,0x3f00009e,0x3f00058d,0x3f000f6d,0x3f001e40,0x3f003207,
+0x3f004ac8,0x3f006886,0x3f008b48,0x3f00b315,0x3f00dff3,0x3f0111ed,0x3f01490b,0x3f018559,0x3f01c6e2,0x3f020db4,0x3f0259dd,0x3f02ab6c,
+0x3f030271,0x3f035efe,0x3f03c126,0x3f0428fe,0x3f04969a,0x3f050a12,0x3f05837e,0x3f0602f9,0x3f06889b,0x3f071484,0x3f07a6d2,0x3f083fa4,
+0x3f08df1d,0x3f098560,0x3f0a3294,0x3f0ae6df,0x3f0ba26d,0x3f0c6569,0x3f0d3001,0x3f0e0267,0x3f0edcce,0x3f0fbf6d,0x3f10aa7b,0x3f119e35,
+0x3f129adb,0x3f13a0ae,0x3f14aff4,0x3f15c8f8,0x3f16ec07,0x3f181972,0x3f19518f,0x3f1a94ba,0x3f1be352,0x3f1d3dbb,0x3f1ea461,0x3f2017b5,
+0x3f21982c,0x3f232644,0x3f24c283,0x3f266d75,0x3f2827af,0x3f29f1cf,0x3f2bcc7b,0x3f2db866,0x3f2fb64c,0x3f31c6f4,0x3f33eb34,0x3f3623ee,
+0x3f387214,0x3f3ad6a7,0x3f3d52ba,0x3f3fe771,0x3f429607,0x3f455fca,0x3f484624,0x3f4b4a95,0x3f4e6ebc,0x3f51b458,0x3f551d47,0x3f58ab90,
+0x3f5c6160,0x3f604116,0x3f644d3d,0x3f68889d,0x3f6cf638,0x3f719955,0x3f767586,0x3f7b8eb3,0x3f807491,0x3f8344bf,0x3f863a79,0x3f895892,
+0x3f8ca22d,0x3f901ac1,0x3f93c624,0x3f97a89f,0x3f9bc6f7,0x3fa02685,0x3fa4cd49,0x3fa9c208,0x3faf0c69,0x3fb4b51e,0x3fbac60f,0x3fc14a99,
+0x3fc84fcd,0x3fcfe4c9,0x3fd81b26,0x3fe1077a,0x3feac202,0x3ff56781,0x40008d2b,0x400701f5,0x400e2b51,0x4016282f,0x401f1f03,0x4029402d,
+0x4034c962,0x40420aa4,0x40516d8e,0x40638075,0x407907e9,0x40898d9f,0x4099aa9b,0x40ae15d7,0x40c8cc0d,0x40ed3bf0,0x4110f0a5,0x413a5065,
+0x41826673,0x41d94fd4,0x42a2f9c6
 };
 
 // TODO spec bug: ScaleF doesn't match with the current libjxl! it turns out that this is actually
@@ -5802,7 +6041,7 @@ J40_STATIC const float J40__HALF_SECANTS[256] = {
 //
 // [(1<<N) + k] = 1 / (cos(k/2^(4+N) pi) * cos(k/2^(3+N) pi) * cos(k/2^(2+N) pi) * 2^N)
 //                for N >= 1 and 0 <= k < 2^N
-J40_STATIC const float J40__LF2LLF_SCALES[64] = {
+J40_STATIC float J40__LF2LLF_SCALES[64];/* = {
 	0, // unused
 	1.00000000f, // N=1, n=8
 	0.50000000f, 0.55446868f, // N=2, n=16
@@ -5817,9 +6056,18 @@ J40_STATIC const float J40__LF2LLF_SCALES[64] = {
 	0.03205500f, 0.03227376f, 0.03252077f, 0.03279691f, 0.03310318f, 0.03344071f, 0.03381077f, 0.03421478f,
 	0.03465429f, 0.03513107f, 0.03564706f, 0.03620441f, 0.03680552f, 0.03745302f, 0.03814986f, 0.03889931f,
 	0.03970498f, 0.04057091f, 0.04150158f, 0.04250201f, 0.04357781f, 0.04473525f, 0.04598138f, 0.04732417f,
+};*/
+
+J40_STATIC int J40__LF2LLF_SCALES_INT[64] = {
+0x0,0x3f800000,0x3f000000,0x3f0df1a9,0x3e800000,0x3e834c1b,0x3e8df1a9,0x3ea2a1b0,0x3e000000,0x3e00d031,0x3e034c1b,0x3e079733,
+0x3e0df1a9,0x3e16c162,0x3e22a1b0,0x3e327ea5,0x3d800000,0x3d8033e0,0x3d80d031,0x3d81d711,0x3d834c1c,0x3d853480,0x3d879733,
+0x3d8a7d2b,0x3d8df1a8,0x3d9202a7,0x3d96c161,0x3d9c4308,0x3da2a1b0,0x3da9fd90,0x3db27ea5,0x3dbc56fa,0x3d000000,0x3d000cf6,
+0x3d0033e0,0x3d0074e0,0x3d00d032,0x3d01461e,0x3d01d713,0x3d028388,0x3d034c1b,0x3d04317d,0x3d053480,0x3d06560d,0x3d079733,
+0x3d08f920,0x3d0a7d29,0x3d0c24cc,0x3d0df1a8,0x3d0fe599,0x3d1202a7,0x3d144b13,0x3d16c163,0x3d196857,0x3d1c4307,0x3d1f54e2,
+0x3d22a1b0,0x3d262daf,0x3d29fd90,0x3d2e1696,0x3d327ea5,0x3d373c4f,0x3d3c56f9,0x3d41d6fd
 };
 
-#define J40__SQRT2 1.4142135623730951f
+#define J40__SQRT2 j40_U32_to_float(0x3fb504f3)//1.4142135623730951f
 
 #define J40__DCT_ARGS float *J40_RESTRICT out, float *J40_RESTRICT in, int32_t t
 #define J40__REPEAT1() for (r1 = 0; r1 < rep1 * rep2; r1 += rep2)
@@ -5832,6 +6080,10 @@ J40_ALWAYS_INLINE void j40__forward_dct_core(
 	void (*half_forward_dct)(J40__DCT_ARGS, int32_t rep1, int32_t rep2)
 ) {
 	int32_t r1, r2, i, N = 1 << t, stride = rep1 * rep2;
+
+	if(!J40__HALF_SECANTS[2]) {
+		memcpy(J40__HALF_SECANTS, J40__HALF_SECANTS_INT, 256*sizeof(int));
+	}
 
 	// out[0..N) = W^c_N H_N in[0..N)
 	J40__REPEAT1() {
@@ -6018,6 +6270,10 @@ J40_STATIC void j40__forward_dct2d_scaled_for_llf(
 	j40__forward_dct_unscaled_view(&scratchv, &bufv);
 	j40__transpose_view_f32(&bufv, scratchv);
 	j40__forward_dct_unscaled_view(&scratchv, &bufv);
+
+	if(!J40__LF2LLF_SCALES[1]) {
+		memcpy(J40__LF2LLF_SCALES,J40__LF2LLF_SCALES_INT,64*sizeof(int));
+	}
 	// TODO spec bug (I.6.5): the pseudocode only works correctly when C > R;
 	// the condition itself can be eliminated by inlining DCT_2D though
 	J40__VIEW_FOREACH(scratchv, y, x, p) {
@@ -6121,7 +6377,7 @@ J40_STATIC void j40__inverse_hornuss(float *buf) {
 			rsum[ix] += scratch[(y + iy * 2) * 8 + (x + ix * 2)];
 		}
 		// conceptually (SUM rsum[i]) = residual_sum + coefficients(x, y) in the spec
-		sample11 = scratch[pos00] - (rsum[0] + rsum[1] + rsum[2] + rsum[3] - scratch[pos00]) * 0.0625f;
+		sample11 = scratch[pos00] - (rsum[0] + rsum[1] + rsum[2] + rsum[3] - scratch[pos00]) * j40_U32_to_float(0x3d800000);//0.0625f;
 		scratch[pos00] = scratch[pos11];
 		scratch[pos11] = 0.0f;
 		for (iy = 0; iy < 4; ++iy) for (ix = 0; ix < 4; ++ix) {
@@ -6171,7 +6427,7 @@ J40_STATIC void j40__inverse_dct23(float *buf) {
 
 // TODO spec issue: the input is a 4x4 matrix but indexed like a 1-dimensional array
 J40_STATIC void j40__inverse_afv22(float *J40_RESTRICT out, float *J40_RESTRICT in) {
-	static const float AFV_BASIS[256] = { // AFVBasis in the specification, but transposed
+	static float AFV_BASIS[256];/* = { // AFVBasis in the specification, but transposed
 		 0.25000000f,  0.87690293f,  0.00000000f,  0.00000000f,
 		 0.00000000f, -0.41053776f,  0.00000000f,  0.00000000f,
 		 0.00000000f,  0.00000000f,  0.00000000f,  0.00000000f,
@@ -6236,9 +6492,29 @@ J40_STATIC void j40__inverse_afv22(float *J40_RESTRICT out, float *J40_RESTRICT 
 		 0.00000000f, -0.06435072f, -0.45175566f,  0.00000000f,
 		-0.60358590f,  0.00000000f,  0.00000000f,  0.00000000f,
 		-0.14266085f, -0.13813540f,  0.34875205f,  0.11354987f,
+	};*/
+	static int AFV_BASIS_INT[256] = {
+		0x3e800000,0x3f607cb6,0x0,0x0,0x0,0xbed23201,0x0,0x0,0x0,0x0,0x0,0x0,0x0,0x0,0x0,0x0,0x3e800000,0x3e61f28c,0x0,0x0,0xbf3504f3,
+		0x3f1fa0e1,0x0,0x0,0x0,0x0,0x0,0x0,0x0,0x0,0x0,0x0,0x3e800000,0xbdcfab11,0x3ed03b15,0xbe59a8ab,0x0,0xbd83ca4f,0xbee74c85,0xbe9bffa4,
+		0x3e9a849b,0x3ed105eb,0x3e32fb49,0xbe581f11,0xbe1215b0,0xbe0d735e,0xbe328fa1,0x3de88cd6,0x3e800000,0xbdcfab11,0x3ee38eb6,0x3e9dfa3a,
+		0x0,0xbd83ca4f,0x3e2259a2,0x3f02e20a,0x3e840e91,0x0,0x3da66c3b,0x3e3e20c0,0xbeaeec0d,0x3ea913ae,0x3d8fee79,0xbd97e917,0x3e800000,
+		0x3e61f28c,0x0,0x0,0x3f3504f3,0x3f1fa0e1,0x0,0x0,0x0,0x0,0x0,0x0,0x0,0x0,0x0,0x0,0x3e800000,0xbdcfab11,0x0,0x3ef0fbb0,0x0,0xbd83ca4f,
+		0xbd256ae6,0x0,0x3e26a0f7,0x0,0x0,0x0,0x3f3c9ba2,0x3db34e04,0xbe958e7b,0x3e46af85,0x3e800000,0xbdcfab11,0x3e48711d,0xbe2602ec,0x0,
+		0xbd83ca4f,0x3bf314a0,0xbe94b9d0,0x3dc2f857,0x0,0xbebc2e2d,0x3efbfc36,0x3e7c2e7c,0xbda2bfa2,0x3eb98a19,0xbeded14a,0x3e800000,
+		0xbdcfab11,0x3e95f84d,0x0,0x0,0xbd83ca4f,0x3ec97a30,0xbd86bb58,0x0,0xbed105eb,0xbe9da2bd,0xbec53f82,0xbdaf988e,0xbeec346d,0x0,
+		0x3e607285,0x3e800000,0xbdcfab11,0xbed03b15,0xbe59a8ab,0x0,0xbd83ca4f,0xbee74c85,0x3e9bffa4,0x3e9a849b,0xbed105eb,0xbe32fb49,
+		0x3e581f11,0xbe1215b0,0xbe0d735e,0xbe328fa1,0x3de88cd6,0x3e800000,0xbdcfab11,0xbe48711d,0xbe2602ec,0x0,0xbd83ca4f,0x3bf314a0,
+		0x3e94b9d0,0x3dc2f857,0x0,0x3ebc2e2d,0xbefbfc36,0x3e7c2e7c,0xbda2bfa2,0x3eb98a19,0xbeded14a,0x3e800000,0xbdcfab11,0x0,0xbef0fbb0,
+		0x0,0xbd83ca4f,0x3de2cc86,0x0,0xbe26a0f7,0x0,0x0,0x0,0x3e1867f0,0x3efe9717,0x3e958e7b,0x3f0e1763,0x3e800000,0xbdcfab11,0x3de90b1f,
+		0xbe15f189,0x0,0xbd83ca4f,0x3da9f246,0xbe74a19c,0xbeb4cca6,0xbed105eb,0x3ef72061,0x3e325ff2,0xbd43533c,0x3e0063c5,0xbedd85b7,
+		0xbe8265c8,0x3e800000,0xbdcfab11,0xbee38eb6,0x3e9dfa3a,0x0,0xbd83ca4f,0x3e2259a2,0xbf02e20a,0x3e840e91,0x0,0xbda66c3b,0xbe3e20c0,
+		0xbeaeec0d,0x3ea913ae,0x3d8fee79,0xbd97e917,0x3e800000,0xbdcfab11,0xbe95f84d,0x0,0x0,0xbd83ca4f,0x3ec97a30,0x3d86bb58,0x0,0x3ed105eb,
+		0x3e9da2bd,0x3ec53f82,0xbdaf988e,0xbeec346d,0x0,0x3e607285,0x3e800000,0xbdcfab11,0xbde90b1f,0xbe15f189,0x0,0xbd83ca4f,0x3da9f246,
+		0x3e74a19c,0xbeb4cca6,0x3ed105eb,0xbef72061,0xbe325ff2,0xbd43533c,0x3e0063c5,0xbedd85b7,0xbe8265c8,0x3e800000,0xbdcfab11,0x0,0x3ed9a8ab,
+		0x0,0xbd83ca4f,0xbee74c85,0x0,0xbf1a849b,0x0,0x0,0x0,0xbe1215b0,0xbe0d735e,0x3eb28fa1,0x3de88cd6
 	};
-
 	int32_t i, j;
+	memcpy(AFV_BASIS,AFV_BASIS_INT,256*sizeof(int));
 	for (i = 0; i < 16; ++i) {
 		float sum = 0.0f;
 		for (j = 0; j < 16; ++j) sum += in[j] * AFV_BASIS[i * 16 + j];
@@ -6279,7 +6555,7 @@ J40_STATIC void j40__inverse_afv(float *buf, int flipx, int flipy) {
 		// DCT23 coefficients to scratch[32..64) = scratch32[0..32), after transposition
 		scratch32[x * 4 + (y / 2)] = buf[y * 8 + x];
 	}
-	scratchafv[0] = (buf[0] + buf[1] + buf[8]) * 4.0f;
+	scratchafv[0] = (buf[0] + buf[1] + buf[8]) * j40_U32_to_float(0x40800000);//4.0f;
 	scratch22[0] = buf[0] - buf[1] + buf[8]; // TODO spec bug: x and y are swapped
 	scratch32[0] = buf[0] - buf[8]; // TODO spec bug: x and y are swapped
 
@@ -6331,7 +6607,7 @@ J40__STATIC_RETURNS_ERR j40__lf_global(j40__st *st) {
 
 	if (!j40__u(st, 1)) { // LfChannelDequantization.all_default
 		// TODO spec bug: missing division by 128
-		for (i = 0; i < 3; ++i) f->m_lf_scaled[i] = j40__f16(st) / 128.0f;
+		for (i = 0; i < 3; ++i) f->m_lf_scaled[i] = j40__f16(st) / j40_U32_to_float(0x43000000);//128.0f
 	}
 
 	if (!f->is_modular) {
@@ -6371,7 +6647,7 @@ J40__STATIC_RETURNS_ERR j40__lf_global(j40__st *st) {
 		}
 
 		if (!j40__u(st, 1)) { // LfChannelCorrelation.all_default
-			f->inv_colour_factor = 1.0f / (float) j40__u32(st, 84, 0, 256, 0, 2, 8, 258, 16);
+			f->inv_colour_factor = j40_U32_to_float(0x3f8000000) / (float) j40__u32(st, 84, 0, 256, 0, 2, 8, 258, 16);
 			f->base_corr_x = j40__f16(st);
 			f->base_corr_b = j40__f16(st);
 			f->x_factor_lf = j40__u(st, 8) - 127;
@@ -6556,17 +6832,16 @@ J40_STATIC void j40__multiply_each_u8(j40__plane *plane, int32_t mult) {
 }
 
 J40__STATIC_RETURNS_ERR j40__smooth_lf(j40__st *st, j40__lf_group_st *gg, j40__plane lfquant[3]) {
-	static const float W0 = 0.05226273532324128f, W1 = 0.20345139757231578f, W2 = 0.0334829185968739f;
-
 	j40__frame_st *f = st->frame;
 	int32_t ggw8 = gg->width8, ggh8 = gg->height8;
 	float *linebuf = NULL, *nline[3], *line[3];
 	float inv_m_lf[3];
 	int32_t x, y, c;
+	float W0 = j40_U32_to_float(0x3d561173), W1 = j40_U32_to_float(0x3e505590), W2 = j40_U32_to_float(0x3d092563);
 
 	for (c = 0; c < 3; ++c) {
 		// TODO spec bug: missing 2^16 scaling
-		inv_m_lf[c] = (float) (f->global_scale * f->quant_lf) / f->m_lf_scaled[c] / 65536.0f;
+		inv_m_lf[c] = (float) (f->global_scale * f->quant_lf) / f->m_lf_scaled[c] /  j40_U32_to_float(0x47800000);//65536.0f;
 	}
 
 	J40__TRY_MALLOC(float, &linebuf, (size_t) (ggw8 * 6));
@@ -6587,16 +6862,16 @@ J40__STATIC_RETURNS_ERR j40__smooth_lf(j40__st *st, j40__lf_group_st *gg, j40__p
 			memcpy(line[c], outline[c], sizeof(float) * (size_t) ggw8);
 		}
 		for (x = 1; x < ggw8 - 1; ++x) {
-			float wa[3], diff[3], gap = 0.5f;
+			float wa[3], diff[3], gap = j40_U32_to_float(0x3f000000);
 			for (c = 0; c < 3; ++c) {
 				wa[c] =
 					(nline[c][x - 1] * W2 + nline[c][x] * W1 + nline[c][x + 1] * W2) +
 					( line[c][x - 1] * W1 +  line[c][x] * W0 +  line[c][x + 1] * W1) +
 					(sline[c][x - 1] * W2 + sline[c][x] * W1 + sline[c][x + 1] * W2);
-				diff[c] = (float)fabs(wa[c] - line[c][x]) * inv_m_lf[c];
+				diff[c] = j40_dbl2f(fabs(wa[c] - line[c][x])) * inv_m_lf[c];
 				if (gap < diff[c]) gap = diff[c];
 			}
-			gap = j40__maxf(0.0f, 3.0f - 4.0f * gap);
+			gap = j40__maxf(0.0f, j40_U32_to_float(0x40400000) - j40_U32_to_float(0x40800000) * gap);
 			// TODO spec bug: s (sample) and wa (weighted average) are swapped in the final formula
 			for (c = 0; c < 3; ++c) outline[c][x] = (wa[c] - line[c][x]) * gap + line[c][x];
 		}
@@ -6762,7 +7037,7 @@ J40__STATIC_RETURNS_ERR j40__hf_metadata(
 		}
 	}
 	for (i = 0; i < nb_varblocks; ++i) {
-		varblocks[i].hfmul.inv = 1.0f / ((float) varblocks[i].hfmul.m1 + 1.0f);
+		varblocks[i].hfmul.inv = j40_U32_to_float(0x3f800000) / ((float) varblocks[i].hfmul.m1 + j40_U32_to_float(0x3f800000));
 	}
 
 	gg->nb_varblocks = nb_varblocks;
@@ -7118,12 +7393,21 @@ J40__STATIC_RETURNS_ERR j40__combine_vardct_from_lf_group(j40__st *st, const j40
 
 J40_STATIC void j40__dequant_hf(j40__st *st, j40__lf_group_st *gg) {
 	// QM_SCALE[i] = 0.8^(i - 2)
-	static const float QM_SCALE[8] = {1.5625f, 1.25f, 1.0f, 0.8f, 0.64f, 0.512f, 0.4096f, 0.32768f};
+	static float QM_SCALE[8]/* = {1.5625f, 1.25f, 1.0f, 0.8f, 0.64f, 0.512f, 0.4096f, 0.32768f}*/;
 
 	j40__frame_st *f = st->frame;
 	int32_t ggw8 = gg->width8, ggh8 = gg->height8;
 	float x_qm_scale, b_qm_scale, quant_bias_num = st->image->quant_bias_num, *quant_bias = st->image->quant_bias;
 	int32_t x8, y8, c, i;
+
+	QM_SCALE[0] = j40_U32_to_float(0x3fc80000);
+	QM_SCALE[1] = j40_U32_to_float(0x3fa00000);
+	QM_SCALE[2] = j40_U32_to_float(0x3f800000);
+	QM_SCALE[3] = j40_U32_to_float(0x3f4ccccd);
+	QM_SCALE[4] = j40_U32_to_float(0x3f23d70a);
+	QM_SCALE[5] = j40_U32_to_float(0x3f03126f);
+	QM_SCALE[6] = j40_U32_to_float(0x3ed1b717);
+	QM_SCALE[7] = j40_U32_to_float(0x3ea7c5ac);
 
 	J40__ASSERT(f->x_qm_scale >= 0 && f->x_qm_scale < 8);
 	J40__ASSERT(f->b_qm_scale >= 0 && f->b_qm_scale < 8);
@@ -7141,7 +7425,7 @@ J40_STATIC void j40__dequant_hf(j40__st *st, j40__lf_group_st *gg) {
 		dct = &J40__DCT_SELECT[dctsel - 2];
 		size = 1 << (dct->log_rows + dct->log_columns);
 		// TODO spec bug: spec says mult[1] = HfMul, should be 2^16 / (global_scale * HfMul)
-		mult[1] = 65536.0f / (float) f->global_scale * gg->varblocks[voff].hfmul.inv;
+		mult[1] = j40_U32_to_float(0x47800000) / (float) f->global_scale * gg->varblocks[voff].hfmul.inv;
 		mult[0] = mult[1] * x_qm_scale;
 		mult[2] = mult[1] * b_qm_scale;
 		dqmat = &f->dq_matrix[dct->param_idx];
@@ -7151,7 +7435,7 @@ J40_STATIC void j40__dequant_hf(j40__st *st, j40__lf_group_st *gg) {
 			float *coeffs = gg->coeffs[c] + (gg->varblocks[voff].coeffoff_qfidx & ~15);
 			for (i = 0; i < size; ++i) { // LLF positions are left unused and can be clobbered
 				// TODO spec issue: "quant" is a variable name and should be monospaced
-				if (-1.0f <= coeffs[i] && coeffs[i] <= 1.0f) {
+				if (j40_U32_to_float(0xbf800000) <= coeffs[i] && coeffs[i] <= QM_SCALE[2]) {
 					coeffs[i] *= quant_bias[c]; // TODO coeffs[i] is integer at this point?
 				} else {
 					coeffs[i] -= quant_bias_num / coeffs[i];
@@ -7257,8 +7541,8 @@ J40__STATIC_RETURNS_ERR j40__combine_vardct_from_lf_group(j40__st *st, const j40
 			}
 
 			if (0) { // TODO display borders for the debugging
-				for (x = 0; x < (1<<dct->log_columns); ++x) scratch[x] = 1.0f - (float) ((dctsel >> x) & 1);
-				for (y = 0; y < (1<<dct->log_rows); ++y) scratch[y << dct->log_columns] = 1.0f - (float) ((dctsel >> y) & 1);
+				for (x = 0; x < (1<<dct->log_columns); ++x) scratch[x] = j40_U32_to_float(0x3f800000) - (float) ((dctsel >> x) & 1);
+				for (y = 0; y < (1<<dct->log_rows); ++y) scratch[y << dct->log_columns] = j40_U32_to_float(0x3f800000) - (float) ((dctsel >> y) & 1);
 			}
 
 			// reposition samples into the rectangular grid
@@ -7279,7 +7563,7 @@ J40__STATIC_RETURNS_ERR j40__combine_vardct_from_lf_group(j40__st *st, const j40
 			samples[1][pos] - samples[0][pos],
 			samples[2][pos],
 		};
-		float itscale = 255.0f / im->intensity_target;
+		float itscale = j40_U32_to_float(0x437f0000) / im->intensity_target;
 		for (c = 0; c < 3; ++c) {
 			float pp = p[c] - cbrt_opsin_bias[c];
 			samples[c][pos] = (pp * pp * pp + im->opsin_bias[c]) * itscale;
@@ -7296,9 +7580,9 @@ J40__STATIC_RETURNS_ERR j40__combine_vardct_from_lf_group(j40__st *st, const j40
 						samples[1][p] * im->opsin_inv_mat[c][1] +
 						samples[2][p] * im->opsin_inv_mat[c][2];
 					// TODO very, very slow; probably different approximations per bpp ranges may be needed
-					v = (v <= 0.0031308f ? 12.92f * v : 1.055f * (float)pow(v, 0.416666656733f/*1.0f / 2.4f*/) - 0.055f); // to sRGB
+					v = (v <= j40_U32_to_float(0x3b4d2e1c) ? j40_U32_to_float(0x414eb852) * v : j40_U32_to_float(0x3f870a3d) * j40_dbl2f(j40_pow(v, j40_U32_to_float(0x3ed55555)/*1.0f / 2.4f*/)) - j40_U32_to_float(0x3d6147ae)); // to sRGB
 					// TODO overflow check
-					pixels[gg->left + x] = (int16_t) ((float) ((1 << im->bpp) - 1) * v + 0.5f);
+					pixels[gg->left + x] = (int16_t) ((float) ((1 << im->bpp) - 1) * v + j40_U32_to_float(0x3f000000));
 				}
 			}
 		} else {
@@ -7350,7 +7634,7 @@ J40__STATIC_RETURNS_ERR j40__gaborish(j40__st *st, j40__plane channels[3 /*xyb*/
 	J40__TRY_MALLOC(float, &linebuf, (size_t) (width * 2));
 
 	for (c = 0; c < 3; ++c) {
-		float w0 = 1.0f, w1 = f->gab.weights[c][0], w2 = f->gab.weights[c][1];
+		float w0 = j40_U32_to_float(0x3f800000), w1 = f->gab.weights[c][0], w2 = f->gab.weights[c][1];
 		float wsum = w0 + w1 * 4 + w2 * 4;
 		J40__SHOULD(j40__surely_nonzero(wsum), "gab0");
 		w0 /= wsum; w1 /= wsum; w2 /= wsum;
@@ -7422,18 +7706,18 @@ J40_STATIC void j40__epf_distance(const j40__plane *in, int32_t dx, int32_t dy, 
 		float *outpixels = J40__F32_PIXELS(out, y + 1) + 1;
 
 		for (x = -1; x < xlo; ++x) {
-			outpixels[x] = (float)fabs(refpixels[j40__mirror1d(x, width)] - offpixels[j40__mirror1d(x + dx, width)]);
+			outpixels[x] = j40_dbl2f(fabs(refpixels[j40__mirror1d(x, width)] - offpixels[j40__mirror1d(x + dx, width)]));
 		}
 		for (; x < xhi; ++x) {
-			outpixels[x] = (float)fabs(refpixels[x] - offpixels[x + dx]);
+			outpixels[x] = j40_dbl2f(fabs(refpixels[x] - offpixels[x + dx]));
 		}
 		for (; x <= width; ++x) {
-			outpixels[x] = (float)fabs(refpixels[j40__mirror1d(x, width)] - offpixels[j40__mirror1d(x + dx, width)]);
+			outpixels[x] = j40_dbl2f(fabs(refpixels[j40__mirror1d(x, width)] - offpixels[j40__mirror1d(x + dx, width)]));
 		}
 	}
 }
 
-static const float J40__SIGMA_THRESHOLD = 0.3f;
+static float J40__SIGMA_THRESHOLD = 0.0f;//0.3f; // will be initialized below 
 
 // computes f(sigma) for each block, where f(x) = 1/x if x >= J40__SIGMA_THRESHOLD and < 0 otherwise.
 // note that `inv_sigma` in the spec is not same to `1/sigma`, hence a different name.
@@ -7443,12 +7727,13 @@ J40__STATIC_RETURNS_ERR j40__epf_recip_sigmas(j40__st *st, const j40__lf_group_s
 	float inv_quant_sharp_lut[8]; // 1 / (epf_quant_mul * epf_sharp_lut[i])
 	int32_t x8, y8, i;
 
+	if(!J40__SIGMA_THRESHOLD) J40__SIGMA_THRESHOLD = j40_U32_to_float(0x3e99999a);
 	J40__TRY(j40__init_plane(st, J40__PLANE_F32, gg->width8, gg->height8, J40__PLANE_FORCE_PAD, out));
 
 	for (i = 0; i < 8; ++i) {
 		float quant_sharp_lut = f->epf.quant_mul * f->epf.sharp_lut[i];
 		J40__SHOULD(j40__surely_nonzero(quant_sharp_lut), "epf0");
-		inv_quant_sharp_lut[i] = 1.0f / quant_sharp_lut;
+		inv_quant_sharp_lut[i] = j40_U32_to_float(0x3f800000) / quant_sharp_lut;
 	}
 
 	if (gg->sharpness.type == J40__PLANE_I16) {
@@ -7481,7 +7766,7 @@ J40__STATIC_RETURNS_ERR j40__epf_recip_sigmas(j40__st *st, const j40__lf_group_s
 		for (x8 = 0; x8 < ggw8; ++x8) {
 			int32_t voff = blocks[x8] & 0xfffff;
 			recip_sigmas[x8] *= gg->varblocks[voff].hfmul.inv;
-			if (recip_sigmas[x8] > 1.0f / J40__SIGMA_THRESHOLD) recip_sigmas[x8] = -1.0f;
+			if (recip_sigmas[x8] > j40_U32_to_float(0x3f800000) / J40__SIGMA_THRESHOLD) recip_sigmas[x8] = j40_U32_to_float(0xbf800000);
 		}
 	}
 
@@ -7514,6 +7799,8 @@ J40__STATIC_RETURNS_ERR j40__epf_step(
 	J40__ASSERT(j40__plane_all_equal_typed(channels, channels + 3) == J40__PLANE_F32);
 	J40__ASSERT(channels->width == width && channels->height == height);
 
+	if(!J40__SIGMA_THRESHOLD) J40__SIGMA_THRESHOLD = j40_U32_to_float(0x3e99999a);
+
 	if (recip_sigmas) {
 		J40__ASSERT(recip_sigmas->width == ggw8 && recip_sigmas->height == ggh8);
 		J40__ASSERT(recip_sigmas->type == J40__PLANE_F32);
@@ -7525,11 +7812,11 @@ J40__STATIC_RETURNS_ERR j40__epf_step(
 		if (f->epf.sigma_for_modular < J40__SIGMA_THRESHOLD) return 0;
 
 		J40__TRY_MALLOC(float, &recip_sigmas_for_modular, (size_t) ggw8);
-		recip_sigma = 1.0f / f->epf.sigma_for_modular;
+		recip_sigma = j40_U32_to_float(0x3f800000) / f->epf.sigma_for_modular;
 		for (x = 0; x < ggw8; ++x) recip_sigmas_for_modular[x] = recip_sigma;
 	}
 
-	sigma_scale *= 1.9330952441687859f; // -1.65 * 4 * (sqrt(0.5) - 1)
+	sigma_scale *= j40_U32_to_float(0x3ff76faa);//1.9330952441687859f; // -1.65 * 4 * (sqrt(0.5) - 1)
 	border_sigma_scale = sigma_scale * f->epf.border_sad_mul;
 
 	for (c = 0; c < 3; ++c) {
@@ -7599,7 +7886,7 @@ J40__STATIC_RETURNS_ERR j40__epf_step(
 			}
 
 			// kernels[*] do not include center, which distance is always 0
-			sum_weights = 1.0f;
+			sum_weights = j40_U32_to_float(0x3f800000);
 			for (c = 0; c < 3; ++c) sum_channels[c] = lines[2][c][x];
 
 			if (dist_uses_cross) {
@@ -7611,7 +7898,7 @@ J40__STATIC_RETURNS_ERR j40__epf_step(
 							distance_rows[k][1][c][x + 0] + distance_rows[k][0][c][x + 1] +
 							distance_rows[k][2][c][x + 1] + distance_rows[k][1][c][x + 2]);
 					}
-					weight = j40__maxf(0.0f, 1.0f + dist * inv_sigma_times_pos_mult);
+					weight = j40__maxf(0.0f, j40_U32_to_float(0x3f800000) + dist * inv_sigma_times_pos_mult);
 					sum_weights += weight;
 					for (c = 0; c < 3; ++c) {
 						sum_channels[c] += lines[2 + kernels[k][0]][c][x + kernels[k][1]] * weight;
@@ -7623,7 +7910,7 @@ J40__STATIC_RETURNS_ERR j40__epf_step(
 					for (c = 0; c < 3; ++c) {
 						dist += f->epf.channel_scale[c] * distance_rows[k][1][c][x + 1];
 					}
-					weight = j40__maxf(0.0f, 1.0f + dist * inv_sigma_times_pos_mult);
+					weight = j40__maxf(0.0f, j40_U32_to_float(0x3f800000) + dist * inv_sigma_times_pos_mult);
 					sum_weights += weight;
 					for (c = 0; c < 3; ++c) {
 						sum_channels[c] += lines[2 + kernels[k][0]][c][x + kernels[k][1]] * weight;
@@ -7674,7 +7961,7 @@ J40__STATIC_RETURNS_ERR j40__epf(j40__st *st, j40__plane channels[3], const j40_
 			st, channels, f->epf.pass0_sigma_scale, recip_sigmas, 12, KERNELS12, distances, 1, gg));
 	}
 	if (f->epf.iters >= 1) { // step 1
-		J40__TRY(j40__epf_step(st, channels, 1.0f, recip_sigmas, 4, KERNELS4, distances, 1, gg));
+		J40__TRY(j40__epf_step(st, channels, j40_U32_to_float(0x3f800000), recip_sigmas, 4, KERNELS4, distances, 1, gg));
 	}
 	if (f->epf.iters >= 2) { // step 2
 		J40__TRY(j40__epf_step(

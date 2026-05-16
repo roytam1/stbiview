@@ -1107,6 +1107,13 @@ STBIDEF void stbi_image_free(void *retval_from_stbi_load)
    STBI_FREE(retval_from_stbi_load);
 }
 
+#if 1
+// use some functions from j40
+float j40_U32_to_float(unsigned int i);
+float j40_dbl2f(double d);
+double j40_pow(double base, double expon);
+#endif
+
 #ifndef STBI_NO_LINEAR
 static float   *stbi__ldr_to_hdr(stbi_uc *data, int x, int y, int comp);
 #endif
@@ -1574,16 +1581,16 @@ STBIDEF int      stbi_is_hdr_from_callbacks(stbi_io_callbacks const *clbk, void 
 }
 
 #ifndef STBI_NO_LINEAR
-static float stbi__l2h_gamma=2.2f, stbi__l2h_scale=1.0f;
+static float stbi__l2h_gamma=0.0f, stbi__l2h_scale=0.0f;
 
 STBIDEF void   stbi_ldr_to_hdr_gamma(float gamma) { stbi__l2h_gamma = gamma; }
 STBIDEF void   stbi_ldr_to_hdr_scale(float scale) { stbi__l2h_scale = scale; }
 #endif
 
-static float stbi__h2l_gamma_i=1.0f/2.2f, stbi__h2l_scale_i=1.0f;
+static float stbi__h2l_gamma_i=0.0f, stbi__h2l_scale_i=0.0f;
 
-STBIDEF void   stbi_hdr_to_ldr_gamma(float gamma) { stbi__h2l_gamma_i = 1/gamma; }
-STBIDEF void   stbi_hdr_to_ldr_scale(float scale) { stbi__h2l_scale_i = 1/scale; }
+STBIDEF void   stbi_hdr_to_ldr_gamma(float gamma) { stbi__h2l_gamma_i = j40_U32_to_float(0x3f800000)/gamma; }
+STBIDEF void   stbi_hdr_to_ldr_scale(float scale) { stbi__h2l_scale_i = j40_U32_to_float(0x3f800000)/scale; }
 
 
 //////////////////////////////////////////////////////////////////////////////
@@ -1864,18 +1871,20 @@ static float   *stbi__ldr_to_hdr(stbi_uc *data, int x, int y, int comp)
    int i,k,n;
    float *output;
    if (!data) return NULL;
+   if(!stbi__l2h_scale) stbi__l2h_scale = j40_U32_to_float(0x3f800000);
+   if(!stbi__l2h_gamma) stbi__l2h_gamma = j40_U32_to_float(0x400ccccd);
    output = (float *) stbi__malloc_mad4(x, y, comp, sizeof(float), 0);
    if (output == NULL) { STBI_FREE(data); return stbi__errpf("outofmem", "Out of memory"); }
    // compute number of non-alpha components
    if (comp & 1) n = comp; else n = comp-1;
    for (i=0; i < x*y; ++i) {
       for (k=0; k < n; ++k) {
-         output[i*comp + k] = (float) (pow(data[i*comp+k]/255.0f, stbi__l2h_gamma) * stbi__l2h_scale);
+         output[i*comp + k] = j40_dbl2f(j40_pow(data[i*comp+k]/j40_U32_to_float(0x437f0000), stbi__l2h_gamma) * stbi__l2h_scale);
       }
    }
    if (n < comp) {
       for (i=0; i < x*y; ++i) {
-         output[i*comp + n] = data[i*comp + n]/255.0f;
+         output[i*comp + n] = data[i*comp + n]/j40_U32_to_float(0x437f0000);
       }
    }
    STBI_FREE(data);
@@ -1890,19 +1899,21 @@ static stbi_uc *stbi__hdr_to_ldr(float   *data, int x, int y, int comp)
    int i,k,n;
    stbi_uc *output;
    if (!data) return NULL;
+   if(!stbi__h2l_scale_i) stbi__h2l_scale_i = j40_U32_to_float(0x3f800000);
+   if(!stbi__h2l_gamma_i) stbi__h2l_gamma_i = j40_U32_to_float(0x3ee8ba2e);
    output = (stbi_uc *) stbi__malloc_mad3(x, y, comp, 0);
    if (output == NULL) { STBI_FREE(data); return stbi__errpuc("outofmem", "Out of memory"); }
    // compute number of non-alpha components
    if (comp & 1) n = comp; else n = comp-1;
    for (i=0; i < x*y; ++i) {
       for (k=0; k < n; ++k) {
-         float z = (float) pow(data[i*comp+k]*stbi__h2l_scale_i, stbi__h2l_gamma_i) * 255 + 0.5f;
+         float z = j40_dbl2f(j40_pow(data[i*comp+k]*stbi__h2l_scale_i, stbi__h2l_gamma_i)) * 255 + j40_U32_to_float(0x3f000000);
          if (z < 0) z = 0;
          if (z > 255) z = 255;
          output[i*comp + k] = (stbi_uc) stbi__float2int(z);
       }
       if (k < comp) {
-         float z = data[i*comp+k] * 255 + 0.5f;
+         float z = data[i*comp+k] * 255 + j40_U32_to_float(0x3f000000);
          if (z < 0) z = 0;
          if (z > 255) z = 255;
          output[i*comp + k] = (stbi_uc) stbi__float2int(z);
@@ -3660,7 +3671,7 @@ static stbi_uc *stbi__resample_row_generic(stbi_uc *out, stbi_uc *in_near, stbi_
 
 // this is a reduced-precision calculation of YCbCr-to-RGB introduced
 // to make sure the code produces the same results in both SIMD and scalar
-#define stbi__float2fixed(x)  (((int) ((x) * 4096.0f + 0.5f)) << 8)
+#define stbi__float2fixed(x)  (((int) ((x) * j40_U32_to_float(0x45800000) + j40_U32_to_float(0x3f000000))) << 8)
 static void stbi__YCbCr_to_RGB_row(stbi_uc *out, const stbi_uc *y, const stbi_uc *pcb, const stbi_uc *pcr, int count, int step)
 {
    int i;
@@ -3669,9 +3680,9 @@ static void stbi__YCbCr_to_RGB_row(stbi_uc *out, const stbi_uc *y, const stbi_uc
       int r,g,b;
       int cr = pcr[i] - 128;
       int cb = pcb[i] - 128;
-      r = y_fixed +  cr* stbi__float2fixed(1.40200f);
-      g = y_fixed + (cr*-stbi__float2fixed(0.71414f)) + ((cb*-stbi__float2fixed(0.34414f)) & 0xffff0000);
-      b = y_fixed                                     +   cb* stbi__float2fixed(1.77200f);
+      r = y_fixed +  cr* stbi__float2fixed(j40_U32_to_float(0x3fb374bc));
+      g = y_fixed + (cr*-stbi__float2fixed(j40_U32_to_float(0x3f36d1e1))) + ((cb*-stbi__float2fixed(j40_U32_to_float(0x3eb0331e))) & 0xffff0000);
+      b = y_fixed                                     +   cb* stbi__float2fixed(j40_U32_to_float(0x3fe2d0e5));
       r >>= 20;
       g >>= 20;
       b >>= 20;
@@ -6289,9 +6300,9 @@ static void *stbi__psd_load(stbi__context *s, int *x, int *y, int *comp, int req
          for (i=0; i < w*h; ++i) {
             stbi__uint16 *pixel = (stbi__uint16 *) out + 4*i;
             if (pixel[3] != 0 && pixel[3] != 65535) {
-               float a = pixel[3] / 65535.0f;
-               float ra = 1.0f / a;
-               float inv_a = 65535.0f * (1 - ra);
+               float a = pixel[3] / j40_U32_to_float(0x477fff00);
+               float ra = j40_U32_to_float(0x3f800000) / a;
+               float inv_a = j40_U32_to_float(0x477fff00) * (1 - ra);
                pixel[0] = (stbi__uint16) (pixel[0]*ra + inv_a);
                pixel[1] = (stbi__uint16) (pixel[1]*ra + inv_a);
                pixel[2] = (stbi__uint16) (pixel[2]*ra + inv_a);
@@ -6301,9 +6312,9 @@ static void *stbi__psd_load(stbi__context *s, int *x, int *y, int *comp, int req
          for (i=0; i < w*h; ++i) {
             unsigned char *pixel = out + 4*i;
             if (pixel[3] != 0 && pixel[3] != 255) {
-               float a = pixel[3] / 255.0f;
-               float ra = 1.0f / a;
-               float inv_a = 255.0f * (1 - ra);
+               float a = pixel[3] / j40_U32_to_float(0x437f0000);
+               float ra = j40_U32_to_float(0x3f800000) / a;
+               float inv_a = j40_U32_to_float(0x437f0000) * (1 - ra);
                pixel[0] = (unsigned char) (pixel[0]*ra + inv_a);
                pixel[1] = (unsigned char) (pixel[1]*ra + inv_a);
                pixel[2] = (unsigned char) (pixel[2]*ra + inv_a);
@@ -7137,7 +7148,7 @@ static void stbi__hdr_convert(float *output, stbi_uc *input, int req_comp)
    if ( input[3] != 0 ) {
       float f1;
       // Exponent
-      f1 = (float) ldexp(1.0f, input[3] - (int)(128 + 8));
+      f1 = j40_dbl2f(ldexp(j40_U32_to_float(0x3f800000), input[3] - (int)(128 + 8)));
       if (req_comp <= 2)
          output[0] = (input[0] + input[1] + input[2]) * f1 / 3;
       else {

@@ -2439,7 +2439,7 @@ stbi_inline static stbi_uc stbi__clamp(int x)
    return (stbi_uc) x;
 }
 
-#define stbi__f2f(x)  ((int) (((x) * j40_int2float(4096) + j40_U32_to_float(0x3f000000))))
+#define stbi__f2f(x)  ((int) (((x) * j40_U32_to_float(0x40a00000) + j40_U32_to_float(0x3f000000))))
 #define stbi__fsh(x)  ((x) * 4096)
 
 // derived from jidctint -- DCT_ISLOW

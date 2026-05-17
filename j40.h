@@ -744,6 +744,73 @@ float j40_dbl2f(double d) {
 #endif
 }
 
+float j40_int2float(int val) {
+#ifndef _M_ALPHA
+    return val;
+#else
+    uint32_t sign = 0;
+    uint32_t magnitude = 0;
+    uint32_t res_frac = 0;
+    uint32_t shift;
+    int32_t exp;
+    int p = 31, G, R, S;
+    // 1. Handle Zero immediately
+    if (val == 0) {
+        return 0x00000000;
+    }
+
+    // 2. Safe Sign and Absolute Value Extraction
+    // Direct negation of INT32_MIN is Undefined Behavior in C.
+    // We use unsigned two's complement inversion (~x + 1) to remain safe.
+    if (val < 0) {
+        sign = 0x80000000;
+        magnitude = ~((uint32_t)val) + 1; 
+    } else {
+        sign = 0;
+        magnitude = (uint32_t)val;
+    }
+
+    // 3. Find the Highest Set Bit (Normalization)
+    // This tells us the power of 2 we are dealing with.
+    while ((magnitude & (1U << p)) == 0) {
+        p--;
+    }
+
+    // The base exponent for 2^p is 127 + p
+    exp = 127 + p;
+
+    // 4. Align Mantissa and Apply GRS Rounding
+    if (p <= 23) {
+        // No bits are lost. Shift left to align the highest bit to bit 23.
+        res_frac = magnitude << (23 - p);
+    } else {
+        // Bits will be cut off. We must use GRS rounding.
+        shift = p - 23;
+
+        G = (magnitude >> shift) & 1;
+        R = (magnitude >> (shift - 1)) & 1;
+        S = (magnitude & ((1U << (shift - 1)) - 1)) != 0;
+
+        res_frac = magnitude >> shift;
+
+        // Round to nearest even
+        if (R && (G || S)) {
+            res_frac++;
+        }
+
+        // Handle carry-over if rounding pushes the fraction into the 25th bit
+        if (res_frac & 0x01000000) {
+            res_frac >>= 1;
+            exp++;
+        }
+    }
+
+    // 5. Assemble final float components
+    // Mask with 0x7FFFFF to strip away the hidden bit (bit 23)
+    return j40_U32_to_float(sign | ((uint32_t)exp << 23) | (res_frac & 0x7FFFFF));
+#endif
+}
+
 /* move math related defines lower */
 double j40_pow(double base, double expon) {
 #ifdef _M_ALPHA

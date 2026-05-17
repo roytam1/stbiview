@@ -1111,6 +1111,7 @@ STBIDEF void stbi_image_free(void *retval_from_stbi_load)
 // use some functions from j40
 float j40_U32_to_float(unsigned int i);
 float j40_dbl2f(double d);
+float j40_int2float(int val);
 double j40_pow(double base, double expon);
 #endif
 
@@ -2438,7 +2439,7 @@ stbi_inline static stbi_uc stbi__clamp(int x)
    return (stbi_uc) x;
 }
 
-#define stbi__f2f(x)  ((int) (((x) * 4096 + 0.5)))
+#define stbi__f2f(x)  ((int) (((x) * j40_int2float(4096) + j40_U32_to_float(0x3f000000))))
 #define stbi__fsh(x)  ((x) * 4096)
 
 // derived from jidctint -- DCT_ISLOW
@@ -2446,9 +2447,9 @@ stbi_inline static stbi_uc stbi__clamp(int x)
    int t0,t1,t2,t3,p1,p2,p3,p4,p5,x0,x1,x2,x3; \
    p2 = s2;                                    \
    p3 = s6;                                    \
-   p1 = (p2+p3) * stbi__f2f(0.5411961f);       \
-   t2 = p1 + p3*stbi__f2f(-1.847759065f);      \
-   t3 = p1 + p2*stbi__f2f( 0.765366865f);      \
+   p1 = (p2+p3) * stbi__f2f(j40_U32_to_float(0x3f0a8bd4));       \
+   t2 = p1 + p3*stbi__f2f(j40_U32_to_float(0xbfec835e));      \
+   t3 = p1 + p2*stbi__f2f(j40_U32_to_float(0x3f43ef15));      \
    p2 = s0;                                    \
    p3 = s4;                                    \
    t0 = stbi__fsh(p2+p3);                      \
@@ -2465,15 +2466,15 @@ stbi_inline static stbi_uc stbi__clamp(int x)
    p4 = t1+t3;                                 \
    p1 = t0+t3;                                 \
    p2 = t1+t2;                                 \
-   p5 = (p3+p4)*stbi__f2f( 1.175875602f);      \
-   t0 = t0*stbi__f2f( 0.298631336f);           \
-   t1 = t1*stbi__f2f( 2.053119869f);           \
-   t2 = t2*stbi__f2f( 3.072711026f);           \
-   t3 = t3*stbi__f2f( 1.501321110f);           \
-   p1 = p5 + p1*stbi__f2f(-0.899976223f);      \
-   p2 = p5 + p2*stbi__f2f(-2.562915447f);      \
-   p3 = p3*stbi__f2f(-1.961570560f);           \
-   p4 = p4*stbi__f2f(-0.390180644f);           \
+   p5 = (p3+p4)*stbi__f2f(j40_U32_to_float(0x3f968317));      \
+   t0 = t0*stbi__f2f(j40_U32_to_float(0x3e98e635));           \
+   t1 = t1*stbi__f2f(j40_U32_to_float(0x40036651));           \
+   t2 = t2*stbi__f2f(j40_U32_to_float(0x4044a74c));           \
+   t3 = t3*stbi__f2f(j40_U32_to_float(0x3fc02b4a));           \
+   p1 = p5 + p1*stbi__f2f(j40_U32_to_float(0xbf6664d7));      \
+   p2 = p5 + p2*stbi__f2f(j40_U32_to_float(0xc02406cf));      \
+   p3 = p3*stbi__f2f(j40_U32_to_float(0xbffb14be));           \
+   p4 = p4*stbi__f2f(j40_U32_to_float(0xbec7c5c2));           \
    t3 += p1+p4;                                \
    t2 += p2+p3;                                \
    t1 += p2+p4;                                \

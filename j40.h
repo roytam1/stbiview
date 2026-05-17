@@ -816,7 +816,7 @@ double j40_pow(double base, double expon) {
 #ifdef _M_ALPHA
     return exp(expon * log(base));
 #else
-    return pow(base, exp);
+    return pow(base, expon);
 #endif
 }
 
@@ -2236,9 +2236,50 @@ J40_INLINE int32_t j40__enum(j40__st *st) {
 
 J40_INLINE float j40__f16(j40__st *st) {
 	int32_t bits = j40__u(st, 16);
-	int32_t biased_exp = (bits >> 10) & 0x1f;
-	if (biased_exp == 31) return J40__ERR("!fin"), 0.0f;
-	return (bits >> 15 ? -1 : 1) * j40_dbl2f(ldexp(j40_dbl2f((bits & 0x3ff) | (biased_exp > 0 ? 0x400 : 0)), biased_exp - 25));
+	// 1. Extract 16-bit components
+	uint32_t sign = (uint32_t)(bits & 0x8000) << 16; // Move bit 15 to bit 31
+	uint32_t exp16 = (bits >> 10) & 0x1F;            // 5 bits of exponent
+	uint32_t frac16 = bits & 0x3FF;                  // 10 bits of fraction
+
+	uint32_t res_exp = 0;
+	uint32_t res_frac = 0;
+
+	// 2. Handle Infinity and NaN (16-bit exponent is all 1s)
+	if (exp16 == 0x1F) {
+		res_exp = 0xFF;
+		res_frac = frac16 << 13; // Left-align the 10-bit fraction into the 23-bit slot
+	}
+	// 3. Handle Zero and Subnormal Numbers
+	else if (exp16 == 0) {
+		if (frac16 == 0) {
+			// Pure Zero
+			res_exp = 0;
+			res_frac = 0;
+		} else {
+			// Subnormal 16-bit float becomes a NORMAL 32-bit float.
+			// We must normalize it by shifting left until the hidden bit is found.
+			uint32_t shift = 0;
+			while ((frac16 & 0x400) == 0) {
+				frac16 <<= 1;
+				shift++;
+			}
+			// Exponent math: 
+			// Half subnormal exponent is effectively -14.
+			// New Exponent = -14 - shift + 127 (32-bit bias) = 113 - shift
+			res_exp = 113 - shift;
+			res_frac = (frac16 & 0x3FF) << 13;
+		}
+	}
+	// 4. Handle Normal Numbers
+	else {
+		// Re-bias the exponent: 
+		// E_32 = E_16 - 15 + 127 = E_16 + 112
+		res_exp = exp16 + 112;
+		res_frac = frac16 << 13; // Shift 10 bits left-aligned into 23 bits
+	}
+
+	// 5. Assemble final 32-bit float bit pattern
+	return j40_U32_to_float(sign | (res_exp << 23) | res_frac);
 }
 
 J40_INLINE int32_t j40__u8(j40__st *st) { // ANS distribution decoding only

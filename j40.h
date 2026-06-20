@@ -6660,6 +6660,12 @@ J40__STATIC_RETURNS_ERR j40__lf_quant(
 		// TODO spec bug: missing 2^16 scaling
 		float mult_lf = f->m_lf_scaled[c] / (float) (f->global_scale * f->quant_lf) * (float) (65536 >> extra_prec);
 		channel[c] = &m->channel[YXB2XYB[c]];
+#if J40_DBG_DUMP
+		j40dbg("lf_quant c=%d mult_lf=%.9g (bits=%08lx) in: type=%u w=%d h=%d pixels=%08lx | out: type=%u w=%d h=%d pixels=%08lx\n",
+			c, (double)mult_lf, (unsigned long)*(unsigned*)&mult_lf,
+			(unsigned)channel[c]->type, channel[c]->width, channel[c]->height, (unsigned long)channel[c]->pixels,
+			(unsigned)lfquant[c].type, lfquant[c].width, lfquant[c].height, (unsigned long)lfquant[c].pixels);
+#endif
 		j40__dequant_lf(channel[c], mult_lf, &lfquant[c]);
 	}
 	j40__add_thresholds(&lfindices, channel[0], f->lf_thr[0], f->nb_lf_thr[0]);
@@ -6864,6 +6870,10 @@ J40__STATIC_RETURNS_ERR j40__lf_group(j40__st *st, j40__lf_group_st *gg) {
 			J40__TRY(j40__inverse_transform(st, &m));
 #if J40_DBG_DUMP
 			j40dbg("LfQuant after inverse_transform codeoff=%ld\n", (long)j40__codestream_offset(st));
+			j40dbg_modular("LfQuant before lf_quant", &m);
+			j40dbg("  global_scale=%d quant_lf=%d m_lf_scaled=[%.9g,%.9g,%.9g]\n",
+				f->global_scale, f->quant_lf,
+				(double)f->m_lf_scaled[0], (double)f->m_lf_scaled[1], (double)f->m_lf_scaled[2]);
 #endif
 			// TODO spec issue: this modular image is independent of bpp/float_sample/etc.
 			// TODO spec bug: channels are in the YXB order

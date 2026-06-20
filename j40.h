@@ -3290,7 +3290,7 @@ J40__STATIC_RETURNS_ERR j40__image_metadata(j40__st *st) {
 			// TODO: should verify cspace grayness with ICC grayness
 			if (!im->want_icc) {
 				if (cspace != CS_XYB) {
-					static const float E[2] = {0.33333333f, 0.33333333f}, DCI[2] = {0.314f, 0.351f},
+					static const float E[2] = {1/3.f, 1/3.f}, DCI[2] = {0.314f, 0.351f},
 						BT2100[3][2] = {{0.708f, 0.292f}, {0.170f, 0.797f}, {0.131f, 0.046f}},
 						P3[3][2] = {{0.680f, 0.320f}, {0.265f, 0.690f}, {0.150f, 0.060f}};
 					switch (j40__enum(st)) {
@@ -3628,6 +3628,39 @@ typedef struct {
 	j40__plane *channel; // should use the same type, either i16 or i32
 	int32_t dist_mult; // min(max(non-meta channel width), J40__MAX_DIST_MULT)
 } j40__modular;
+
+/* ---- VC4-vs-VC6 decode-divergence dump (writes to a file; GUI-safe) ---- */
+#define J40_DBG_DUMP 1
+#if J40_DBG_DUMP && !defined(J40_DBG_DEFINED)
+#define J40_DBG_DEFINED
+#include <stdio.h>
+#include <stdarg.h>
+static FILE *g_j40dbg = (FILE *)0;
+static void j40dbg_open(void) { if (!g_j40dbg) g_j40dbg = fopen("j40dbg.log", "w"); }
+static void j40dbg(const char *fmt, ...) {
+	va_list ap;
+	j40dbg_open();
+	if (!g_j40dbg) return;
+	va_start(ap, fmt);
+	vfprintf(g_j40dbg, fmt, ap);
+	va_end(ap);
+	fflush(g_j40dbg);
+}
+static void j40dbg_modular(const char *tag, const j40__modular *m) {
+	int i;
+	j40dbg_open();
+	if (!g_j40dbg) return;
+	fprintf(g_j40dbg, "%s: num_channels=%d nb_meta=%d nb_transforms=%d\n",
+		tag, m->num_channels, m->nb_meta_channels, m->nb_transforms);
+	for (i = 0; i < m->num_channels; i++) {
+		const j40__plane *c = &m->channel[i];
+		fprintf(g_j40dbg, "  ch[%d] type=%u w=%d h=%d hs=%d vs=%d pixels=%08lx\n",
+			i, (unsigned)c->type, c->width, c->height, (int)c->hshift, (int)c->vshift,
+			(unsigned long)c->pixels);
+	}
+	fflush(g_j40dbg);
+}
+#endif
 
 J40_STATIC void j40__init_modular_common(j40__modular *m);
 J40__STATIC_RETURNS_ERR j40__init_modular(
@@ -4881,7 +4914,7 @@ J40_STATIC void j40__dct_quant_weights(
 	int32_t x, y, c;
 	for (c = 0; c < 3; ++c) {
 		for (y = 0; y < rows; ++y) for (x = 0; x < columns; ++x) {
-			static const float INV_SQRT2 = 0.707106232643f; //1.0f / 1.414214562373095f; // 1/(sqrt(2) + 1e-6)
+			static const float INV_SQRT2 = 1.0f / 1.414214562373095f; // 1/(sqrt(2) + 1e-6)
 			float d = (float)hypot((float) x * inv_columns_m1, (float) y * inv_rows_m1);
 			// TODO spec issue: num_bands doesn't exist (probably len)
 			out[y * columns + x][c] = j40__interpolate(d * INV_SQRT2, c, bands, len);
@@ -5270,17 +5303,17 @@ J40__STATIC_RETURNS_ERR j40__frame_header(j40__st *st) {
 	f->epf.quant_mul = 0.46f;
 	f->epf.pass0_sigma_scale = 0.9f;
 	f->epf.pass2_sigma_scale = 6.5f;
-	f->epf.border_sad_mul = 0.666666686535f;//2.0f / 3.0f;
+	f->epf.border_sad_mul = 2.0f / 3.0f;
 	f->epf.sigma_for_modular = 1.0f;
 	// TODO spec bug: default values for m_*_lf_unscaled should be reciprocals of the listed values
-	f->m_lf_scaled[0] = 0.000244140625f;//1.0f / 4096.0f;
-	f->m_lf_scaled[1] = 0.001953125f;//1.0f / 512.0f;
-	f->m_lf_scaled[2] = 0.00390625f;//1.0f / 256.0f;
+	f->m_lf_scaled[0] = 1.0f / 4096.0f;
+	f->m_lf_scaled[1] = 1.0f / 512.0f;
+	f->m_lf_scaled[2] = 1.0f / 256.0f;
 	f->global_tree = NULL;
 	memset(&f->global_codespec, 0, sizeof(j40__code_spec));
 	memset(&f->gmodular, 0, sizeof(j40__modular));
 	f->block_ctx_map = NULL;
-	f->inv_colour_factor = 0.011904762127f;//1 / 84.0f;
+	f->inv_colour_factor = 1 / 84.0f;
 	f->x_factor_lf = 0;
 	f->b_factor_lf = 0;
 	f->base_corr_x = 0.0f;
@@ -6802,6 +6835,10 @@ J40__STATIC_RETURNS_ERR j40__lf_group(j40__st *st, j40__lf_group_st *gg) {
 		}
 	}
 
+#if J40_DBG_DUMP
+	j40dbg("=== lf_group ENTER: ggidx=%d num_lf_groups=%d is_modular=%d use_lf_frame=%d codeoff=%ld\n",
+		(int)gg->idx, (int)f->num_lf_groups, f->is_modular, f->use_lf_frame, (long)j40__codestream_offset(st));
+#endif
 	if (!f->is_modular) {
 		int32_t ggw8 = gg->width8, ggh8 = gg->height8;
 		int32_t ggw64 = gg->width64, ggh64 = gg->height64;
@@ -6817,10 +6854,17 @@ J40__STATIC_RETURNS_ERR j40__lf_group(j40__st *st, j40__lf_group_st *gg) {
 			h[0] = h[1] = h[2] = ggh8;
 			J40__TRY(j40__init_modular(st, 3, w, h, &m));
 			J40__TRY(j40__modular_header(st, f->global_tree, &f->global_codespec, &m));
+#if J40_DBG_DUMP
+			j40dbg("LfQuant extra_prec=%d codeoff=%ld\n", extra_prec, (long)j40__codestream_offset(st));
+			j40dbg_modular("LfQuant after modular_header", &m);
+#endif
 			J40__TRY(j40__allocate_modular(st, &m));
 			for (c = 0; c < m.num_channels; ++c) J40__TRY(j40__modular_channel(st, &m, c, sidx0));
 			J40__TRY(j40__finish_and_free_code(st, &m.code));
 			J40__TRY(j40__inverse_transform(st, &m));
+#if J40_DBG_DUMP
+			j40dbg("LfQuant after inverse_transform codeoff=%ld\n", (long)j40__codestream_offset(st));
+#endif
 			// TODO spec issue: this modular image is independent of bpp/float_sample/etc.
 			// TODO spec bug: channels are in the YXB order
 			J40__TRY(j40__lf_quant(st, extra_prec, &m, gg, lfquant));
@@ -6832,15 +6876,28 @@ J40__STATIC_RETURNS_ERR j40__lf_group(j40__st *st, j40__lf_group_st *gg) {
 		// HF metadata
 		// SPEC nb_block is off by one
 		nb_varblocks = j40__u(st, j40__ceil_lg32((uint32_t) (ggw8 * ggh8))) + 1; // at most 2^20
+#if J40_DBG_DUMP
+		j40dbg("=== lf_group HF: ggidx=%d ggw8=%d ggh8=%d ggw64=%d ggh64=%d nb_varblocks=%d codeoff=%ld\n",
+			(int)gg->idx, ggw8, ggh8, ggw64, ggh64, nb_varblocks, (long)j40__codestream_offset(st));
+#endif
 		w[0] = w[1] = ggw64; h[0] = h[1] = ggh64; // XFromY, BFromY
 		w[2] = nb_varblocks; h[2] = 2; // BlockInfo
 		w[3] = ggw8; h[3] = ggh8; // Sharpness
 		J40__TRY(j40__init_modular(st, 4, w, h, &m));
 		J40__TRY(j40__modular_header(st, f->global_tree, &f->global_codespec, &m));
+#if J40_DBG_DUMP
+		j40dbg_modular("after modular_header", &m);
+#endif
 		J40__TRY(j40__allocate_modular(st, &m));
+#if J40_DBG_DUMP
+		j40dbg_modular("after allocate_modular", &m);
+#endif
 		for (i = 0; i < m.num_channels; ++i) J40__TRY(j40__modular_channel(st, &m, i, sidx2));
 		J40__TRY(j40__finish_and_free_code(st, &m.code));
 		J40__TRY(j40__inverse_transform(st, &m));
+#if J40_DBG_DUMP
+		j40dbg_modular("before hf_metadata", &m);
+#endif
 		J40__TRY(j40__hf_metadata(st, nb_varblocks, &m, lfquant, gg));
 		j40__free_modular(&m);
 		for (i = 0; i < 3; ++i) j40__free_plane(&lfquant[i]);
@@ -7296,7 +7353,7 @@ J40__STATIC_RETURNS_ERR j40__combine_vardct_from_lf_group(j40__st *st, const j40
 						samples[1][p] * im->opsin_inv_mat[c][1] +
 						samples[2][p] * im->opsin_inv_mat[c][2];
 					// TODO very, very slow; probably different approximations per bpp ranges may be needed
-					v = (v <= 0.0031308f ? 12.92f * v : 1.055f * (float)pow(v, 0.416666656733f/*1.0f / 2.4f*/) - 0.055f); // to sRGB
+					v = (v <= 0.0031308f ? 12.92f * v : 1.055f * (float)pow(v, 1.0f / 2.4f) - 0.055f); // to sRGB
 					// TODO overflow check
 					pixels[gg->left + x] = (int16_t) ((float) ((1 << im->bpp) - 1) * v + 0.5f);
 				}

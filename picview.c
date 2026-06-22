@@ -831,6 +831,119 @@ unsigned char* LoadQOI(const char* szPath, int* w, int* h) {
     return pRGB;
 }
 
+typedef struct {
+    WORD Key1;        // Magic number: 0x6144 ("aD") or 0x694c ("iL") depending on version
+    WORD Key2;        // Magic number: 0x4d6e ("Mn") or 0x536e ("Sn")
+    WORD Width;       // Image width in pixels
+    WORD Height;      // Image height in pixels
+    WORD XAspectRatio;// Display aspect ratio (important for 1980s CGA/EGA screens)
+    WORD YAspectRatio;
+    WORD XPrinterRes; // Intended printer resolution
+    WORD YPrinterRes;
+    WORD Reserved[8]; // Padding to make it 32 bytes
+} MSP_HEADER;
+
+unsigned char* LoadMSP(const char* szPath, int* w, int* h) {
+    MSP_HEADER header;
+    int width, height, bytesPerLine, x, y, i;
+    BOOL isVersion2 = FALSE;
+    unsigned char* pRGB;
+    FILE* f = fopen(szPath, "rb");
+    if (!f) return NULL;
+
+    if (fread(&header, 1, 32, f) != 32) { fclose(f); return NULL; }
+
+    // Validate Windows Paint MSP Magic numbers ("Dan McCabe", the original author's name)
+    // v1: 0x6144 0x4d6e ("aD", "Mn" due to little-endian)
+    // v2: 0x694c 0x536e ("iL", "Sn")
+    if (header.Key1 == 0x6144 && header.Key2 == 0x4d6e) {
+        isVersion2 = FALSE;
+    } else if (header.Key1 == 0x694c && header.Key2 == 0x536e) {
+        isVersion2 = TRUE;
+    } else {
+        // Not a valid Paint MSP file
+        fclose(f);
+        return NULL;
+    }
+
+    width = header.Width;
+    height = header.Height;
+
+    // Allocate 24-bit RGB target buffer for the viewer
+    pRGB = (unsigned char*)malloc(width * height * 3);
+    if (!pRGB) { fclose(f); return NULL; }
+
+    bytesPerLine = (width + 7) / 8;
+
+    if (!isVersion2) {
+        // --- VERSION 1 DECODER: Uncompressed Raw Bits ---
+        unsigned char* lineBuf = (unsigned char*)malloc(bytesPerLine);
+
+        for (y = 0; y < height; y++) {
+            fread(lineBuf, 1, bytesPerLine, f);
+            for (x = 0; x < width; x++) {
+                // MSP reads bits from Most Significant Bit (MSB) to LSB
+                int byteIdx = x / 8;
+                int bitIdx = 7 - (x % 8);
+                BYTE val = (lineBuf[byteIdx] & (1 << bitIdx)) ? 255 : 0; // 0 = Black, 1 = White
+
+                int rgbIdx = (y * width + x) * 3;
+                pRGB[rgbIdx] = pRGB[rgbIdx+1] = pRGB[rgbIdx+2] = val;
+            }
+        }
+        free(lineBuf);
+    }
+    else {
+        // --- VERSION 2 DECODER: PackBits-style RLE ---
+        // Skip the Scan-line map (height * 2 bytes) - used for random access, we don't need it
+        unsigned char* lineBuf;
+        fseek(f, height * 2, SEEK_CUR);
+
+        lineBuf = (unsigned char*)malloc(bytesPerLine);
+
+        for (y = 0; y < height; y++) {
+            int outBytes = 0;
+            memset(lineBuf, 255, bytesPerLine);
+            // Unpack one row
+            while (outBytes < bytesPerLine) {
+                int control = fgetc(f);
+                if (control == EOF) break;
+
+                if (control == 0) {
+                    // Single-byte RLE run
+                    int count = fgetc(f);
+                    int pattern = fgetc(f);
+                    for (i = 0; i < count && outBytes < bytesPerLine; i++) {
+                        lineBuf[outBytes++] = (unsigned char)pattern;
+                    }
+                }
+                else {
+                    int count = control;
+                    for (i = 0; i < count && outBytes < bytesPerLine; i++) {
+                        lineBuf[outBytes++] = fgetc(f);
+                    }
+                }
+            }
+
+            // Convert unpacked line buffer bits to our 24-bit output image
+            for (x = 0; x < width; x++) {
+                int byteIdx = x / 8;
+                int bitIdx = 7 - (x % 8);
+                BYTE val = (lineBuf[byteIdx] & (1 << bitIdx)) ? 255 : 0;
+
+                int rgbIdx = (y * width + x) * 3;
+                pRGB[rgbIdx] = pRGB[rgbIdx+1] = pRGB[rgbIdx+2] = val;
+            }
+        }
+        free(lineBuf);
+    }
+
+    fclose(f);
+    *w = width;
+    *h = height;
+    return pRGB;
+}
+
 void LoadImageFromPath(HWND hwnd, char* filePath) {
     int imgW = 0, imgH = 0, channels, bpp, stride, x, y;
     unsigned char *pSrc, *pDest;
@@ -923,6 +1036,11 @@ void LoadImageFromPath(HWND hwnd, char* filePath) {
     if(fileExt && stricmp(fileExt,".xpm") == 0) {
         isWebp = 1; // not really webp, but same malloc style as webp
         pSrc = LoadXPM(filePath, &imgW, &imgH);
+    }
+    else
+    if(fileExt && stricmp(fileExt,".msp") == 0) {
+        isWebp = 1; // not really webp, but same malloc style as webp
+        pSrc = LoadMSP(filePath, &imgW, &imgH);
     }
     else
     {
@@ -1063,7 +1181,7 @@ void OpenPicFile(HWND hwnd) {
     ofn.hwndOwner = hwnd;
     ofn.lpstrFile = szFile;
     ofn.nMaxFile = sizeof(szFile);
-    ofn.lpstrFilter = "Images\0*.jpg;*.png;*.gif;*.bmp;*.tga;*.pnm;*.ppm;*.pgm;*.webp;*.web;*.wbp;*.pcx;*.xbm;*.xpm;*.qoi;*.jxl\0All Files\0*.*\0";
+    ofn.lpstrFilter = "Images\0*.jpg;*.png;*.gif;*.bmp;*.tga;*.pnm;*.ppm;*.pgm;*.webp;*.web;*.wbp;*.pcx;*.xbm;*.xpm;*.msp;*.qoi;*.jxl\0All Files\0*.*\0";
     ofn.Flags = OFN_PATHMUSTEXIST | OFN_FILEMUSTEXIST;
 
     if (GetOpenFileName(&ofn)) {

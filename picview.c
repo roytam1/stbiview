@@ -1062,7 +1062,10 @@ TrySTB:
     // Allocate the destination buffer for GDI
     pDest = (unsigned char*)malloc(stride * imgH);
     if (!pDest) {
-        if(!isWebp && !isPCX) stbi_image_free(pSrc);
+        if(isWebp) free(pSrc);
+        else if(isPCX) drpcx_free(pSrc);
+        else if(isJXL) j40_free(&jxlimage);
+        else stbi_image_free(pSrc); // Free the original stb_image buffer
         MessageBox(hwnd, "Out of memory", "Error", MB_ICONERROR);
         return;
     }

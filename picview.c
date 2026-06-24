@@ -840,7 +840,12 @@ typedef struct {
     WORD YAspectRatio;
     WORD XPrinterRes; // Intended printer resolution
     WORD YPrinterRes;
-    WORD Reserved[8]; // Padding to make it 32 bytes
+    WORD PrinterWidth;  /* Width of the printer in pixels   */
+    WORD PrinterHeight; /* Height of the printer in pixels   */
+    WORD XAspectCorr;   /* X aspect correction (unused)     */
+    WORD YAspectCorr;   /* Y aspect correction (unused)     */
+    WORD Checksum;      /* Checksum of previous 24 bytes   */
+    WORD Padding[3];    /* Unused padding    */
 } MSP_HEADER;
 
 unsigned char* LoadMSP(const char* szPath, int* w, int* h) {

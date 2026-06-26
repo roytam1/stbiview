@@ -15,7 +15,7 @@ extern "C" {
 
 #include <stddef.h>
 #include <stdlib.h>
-#if defined(__cplusplus) || (defined(__STDC_VERSION__) && __STDC_VERSION__ >= 199901)
+#if (defined(__cplusplus) && !defined(_MSC_VER)) || (defined(__cplusplus) && defined(_MSC_VER) && _MSC_VER >= 1600) || (defined(__STDC_VERSION__) && __STDC_VERSION__ >= 199901)
 #include <stdint.h>
 
 typedef uint8_t simplewebp_u8;

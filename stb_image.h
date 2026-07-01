@@ -6746,9 +6746,9 @@ static stbi_uc *stbi__process_gif_raster(stbi__context *s, stbi__gif *g)
                stbi__skip(s,len);
             return g->out;
          } else if (code <= avail) {
-            if (first) {
+            /*if (first) {
                return stbi__errpuc("no clear code", "Corrupt GIF");
-            }
+            }*/
 
             if (oldcode >= 0) {
                p = &g->codes[avail++];

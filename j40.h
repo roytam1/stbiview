@@ -137,7 +137,7 @@ int main(int argc, char **argv) {
 #endif
 
 /* move math related defines lower */
-#if defined(_MSC_VER) && (_MSC_VER <= 1800)
+#if defined(__TINYC__) || (defined(_MSC_VER) && (_MSC_VER <= 1800))
     #include <float.h>
     #define isfinite _finite
     //#define cbrtf(x) (float)pow(x,(double)1/3)
@@ -190,7 +190,7 @@ extern "C" {
 #endif
 
 #ifndef J40_STATIC_ASSERT
-	#if __STDC_VERSION__ >= 199901L
+	#if !defined(__TINYC__) && __STDC_VERSION__ >= 199901L
 		#define J40_STATIC_ASSERT(cond, msg) _Static_assert(cond, #msg)
 	#else
 		#define J40_STATIC_ASSERT(cond, msg) typedef char j40__##msg[(cond) ? 1 : -1]
@@ -675,7 +675,7 @@ J40_ALWAYS_INLINE int j40__surely_nonzero(float x) {
 	return isfinite(x) && fabs(x) >= 1e-8f;
 }
 
-#ifdef _MSC_VER // required for j40__floor/ceil_lgN implementations
+#if defined(_MSC_VER) || defined(__TINYC__) // required for j40__floor/ceil_lgN implementations
 #if _MSC_VER > 1400
 #include <intrin.h>
 #pragma intrinsic(_BitScanReverse)
@@ -844,7 +844,7 @@ J40_ALWAYS_INLINE j40__intN j40__(clamp_mul,N)(j40__intN x, j40__intN y) {
 
 #endif // defined J40_IMPLEMENTATION
 
-#ifdef _MSC_VER
+#if defined(_MSC_VER) || defined(__TINYC__)
 	#define J40__CLZN j40__(clz, N)
 #else
 	#define J40__UINTN_MAX J40__CONCAT3(UINT, J40__N, _MAX)

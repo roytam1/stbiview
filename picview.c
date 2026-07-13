@@ -305,6 +305,10 @@ int WINAPI MyGetScrollInfo_init(HWND hwnd, int nBar, LPSCROLLINFO lpsi)
 /* end of [G|S]etScrollInfo */
 
 /* DragQueryFile wrapper */
+#ifdef __TINYC__
+#define HDROP HANDLE
+#endif
+
 typedef UINT (WINAPI *apiDragQueryFile)(HDROP, UINT, LPSTR, UINT);
 UINT WINAPI MyDragQueryFile_fallback(HDROP hDrop, UINT iFile, LPSTR lpszFile, UINT cch) {
 	return 0;
@@ -1203,9 +1207,92 @@ void UpdateWindowTitle(HWND hwnd, char* filePath) {
     SetWindowText(hwnd, newTitle);
 }
 
+char**
+CommandLineToArgvA(char* CmdLine, int* _argc)
+{
+    char** argv;
+    char*  _argv;
+    unsigned long   len;
+    unsigned long   argc;
+    char   a;
+    unsigned long   i, j;
+
+    unsigned int  in_QM;
+    unsigned int  in_TEXT;
+    unsigned int  in_SPACE;
+
+    len = strlen(CmdLine);
+    i = ((len+2)/2)*sizeof(PVOID) + sizeof(PVOID);
+
+    argv = (char**)GlobalAlloc(GMEM_FIXED,
+        i + (len+2)*sizeof(CHAR));
+
+    _argv = (char*)(((char*)argv)+i);
+
+    argc = 0;
+    argv[argc] = _argv;
+    in_QM = 0;
+    in_TEXT = 0;
+    in_SPACE = 1;
+    i = 0;
+    j = 0;
+
+    while( a = CmdLine[i] ) {
+        if(in_QM) {
+            if(a == '\"') {
+                in_QM = 0;
+            } else {
+                _argv[j] = a;
+                j++;
+            }
+        } else {
+            switch(a) {
+            case '\"':
+                in_QM = 1;
+                in_TEXT = 1;
+                if(in_SPACE) {
+                    argv[argc] = _argv+j;
+                    argc++;
+                }
+                in_SPACE = 0;
+                break;
+            case ' ':
+            case '\t':
+            case '\n':
+            case '\r':
+                if(in_TEXT) {
+                    _argv[j] = '\0';
+                    j++;
+                }
+                in_TEXT = 0;
+                in_SPACE = 1;
+                break;
+            default:
+                in_TEXT = 1;
+                if(in_SPACE) {
+                    argv[argc] = _argv+j;
+                    argc++;
+                }
+                _argv[j] = a;
+                j++;
+                in_SPACE = 0;
+                break;
+            }
+        }
+        i++;
+    }
+    _argv[j] = '\0';
+    argv[argc] = 0;
+
+    (*_argc) = argc;
+    return argv;
+}
+
 int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrev, LPSTR lpCmdLine, int nCmdShow) {
     HWND hwnd;
     MSG msg;
+    int argc;
+    char** argv;
     WNDCLASS wc = {0};
     wc.lpfnWndProc   = WindowProc;
     wc.hInstance     = hInstance;
@@ -1213,7 +1300,6 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrev, LPSTR lpCmdLine, int nC
     wc.hIcon         = LoadIcon(hInstance, MAKEINTRESOURCEA(IDI_APPICON));;
     wc.hbrBackground = (HBRUSH)(COLOR_WINDOW + 1);
     wc.lpszClassName = MAINWIN_CLASS;
-
     RegisterClass(&wc);
 
     hwnd = CreateWindowEx(WS_EX_ACCEPTFILES, MAINWIN_CLASS, MAINWIN_TITLE " - " MAINWIN_TITLE_SUFFIX,
@@ -1223,10 +1309,10 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrev, LPSTR lpCmdLine, int nC
     ShowWindow(hwnd, nCmdShow);
 
     // --- COMMAND LINE PROCESSING ---
-    // __argc and __argv are globals defined in stdlib.h / TCHAR.h
     // index 0 is the EXE path, index 1 is the first argument (the file)
-    if (__argc > 1) {
-        LoadImageFromPath(hwnd, __argv[1]);
+    argv = CommandLineToArgvA(GetCommandLine(), &argc);
+    if (argc > 1) {
+        LoadImageFromPath(hwnd, argv[1]);
         UpdateWindowTitle(hwnd, szFile);
     }
 

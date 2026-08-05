@@ -23,6 +23,12 @@
 #include "j40.h"
 #include "j40.h"
 
+#define MINITIFF_IMPLEMENTATION
+#undef STB_IMAGE_IMPLEMENTATION // already included, so no need to include stbi function body
+#define MINITIFF_USE_STB_IMAGE
+#define MINITIFF_USE_STB_ZLIB
+#include "minitiff.h"
+
 /* MyVerInfo from GreenPad */
 /* MYVERINFO defination */
 #pragma pack(push,1)
@@ -960,7 +966,8 @@ void LoadImageFromPath(HWND hwnd, char* filePath) {
     HDC hdcScreen;
     simplewebp *swebp;
     j40_image jxlimage;
-    int isWebp = 0, isJXL = 0, isPCX = 0, swRet;
+    MiniTIFF_Image *tiffimg;
+    int isWebp = 0, isJXL = 0, isPCX = 0, isTIFF = 0, swRet;
     char errBuf[MAX_PATH + 50];
 
     UpdateWindowTitle(hwnd, "Loading...");
@@ -1032,6 +1039,24 @@ void LoadImageFromPath(HWND hwnd, char* filePath) {
         pSrc = drpcx_load_file(filePath, DRPCX_FALSE, &imgW, &imgH, &channels, 3);
     }
     else
+    if(fileExt &&
+        (stricmp(fileExt,".tiff") == 0 ||
+         stricmp(fileExt,".tif") == 0)) {
+        isTIFF = 1;
+        tiffimg = tiff_load_file(filePath, 0);
+        if(tiffimg) {
+            imgW = tiffimg->width;
+            imgH = tiffimg->height;
+            pSrc = tiffimg->pixels;
+
+            for(x=0; x < imgW*imgH; x++) {
+                pSrc[x * 3 + 0] = pSrc[x * 4 + 0];
+                pSrc[x * 3 + 1] = pSrc[x * 4 + 1];
+                pSrc[x * 3 + 2] = pSrc[x * 4 + 2];
+            }
+        }
+    }
+    else
     if(fileExt && stricmp(fileExt,".qoi") == 0) {
         isWebp = 1; // not really webp, but same malloc style as webp
         pSrc = LoadQOI(filePath, &imgW, &imgH);
@@ -1073,6 +1098,7 @@ TrySTB:
     if (!pDest) {
         if(isWebp) free(pSrc);
         else if(isPCX) drpcx_free(pSrc);
+        else if(isTIFF) tiff_free(tiffimg);
         else if(isJXL) j40_free(&jxlimage);
         else stbi_image_free(pSrc); // Free the original stb_image buffer
         MessageBox(hwnd, "Out of memory", "Error", MB_ICONERROR);
@@ -1193,7 +1219,7 @@ void OpenPicFile(HWND hwnd) {
     ofn.hwndOwner = hwnd;
     ofn.lpstrFile = szFile;
     ofn.nMaxFile = sizeof(szFile);
-    ofn.lpstrFilter = "Images\0*.jpg;*.png;*.gif;*.bmp;*.tga;*.pnm;*.ppm;*.pgm;*.webp;*.web;*.wbp;*.pcx;*.xbm;*.xpm;*.msp;*.qoi;*.jxl\0All Files\0*.*\0";
+    ofn.lpstrFilter = "Images\0*.jpg;*.png;*.gif;*.bmp;*.tga;*.pnm;*.ppm;*.pgm;*.webp;*.web;*.wbp;*.pcx;*.xbm;*.xpm;*.msp;*.qoi;*.jxl;*.tif;*.tiff\0All Files\0*.*\0";
     ofn.Flags = OFN_PATHMUSTEXIST | OFN_FILEMUSTEXIST;
 
     if (GetOpenFileName(&ofn)) {

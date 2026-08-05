@@ -9,7 +9,7 @@ A high-performance, lightweight image viewer specifically engineered for **Windo
 * **Custom Generic 256 Color Palette:** Based on ["win8" palette](https://web.archive.org/web/20250227072942/https://eisbox.net/downloads/palettes/win-8.txt) with some modifications on both palette and `FindClosestColor` function.
 * **Universal Format Support:**
     * **Modern:** QOI (Quite OK Image), WebP, JPEG XL, JPG, PNG, GIF (without animation), BMP.
-    * **Retro/Unix:** PCX, TGA, PNM, PGM, PPM, XBM (X-BitMap) and XPM (X-PixMap).
+    * **Retro/Unix:** PCX, TGA, TIFF (Classic TIFF, BigTIFF and some encodings are not supported), PNM, PGM, PPM, XBM (X-BitMap) and XPM (X-PixMap).
 * **Smooth Drag-to-Scroll:** An "Acrobat-style" Hand Tool for panning large images, utilizing `SetCapture` and `ScrollWindowEx` for tear-free movement.
 * **Architecture-Aware Rendering:**
     * **Win32s:** Direct-to-screen `StretchDIBits` to stay within 16-bit GDI resource heaps.
@@ -29,9 +29,11 @@ On a 486SX, every clock cycle counts. The image processing pipeline follows thes
 | **QOI** | ⚡ Extremely Fast | Byte-matching opcodes, no complex math. | Internal function |
 | **XBM** | ⚡ Fast | Simple hex string parsing. | Internal function |
 | **BMP** | ✅ Fast | Zero processing required. | stb_image |
+| **PCX** | ✅ Fast | Run Length Encoding can be processed instantly. | dr_pcx |
+| **TIFF** | ✅ Moderate | Depends on actual encoding. Fast with Raw, Moderate with LZW and Deflate, Slow with JPEG. | minitiff, stb_image |
 | **PNG** | 🐢 Slow | Complex zlib decompression and PNG filters. | stb_image |
 | **JPG** , **WebP** | 🐢 Slow | Heavy IDCT math (emulated on SX). | stb_image, simplewebp |
-| **JPEG XL** | 🐢 Slow | Lots of floating point operations. | j40 |
+| **JPEG XL** | 🐢 Slow | Lots of floating point operations. Lossless JPEG XL can be decoded faster than lossy JPEG XL. | j40 |
 
 ## ⌨️ Controls
 
@@ -55,6 +57,7 @@ On a 486SX, every clock cycle counts. The image processing pipeline follows thes
     * `dr_pcx.h`
     * `simplewebp.h`
     * `j40.h`
+    * `minitiff.h`
     * `GDI32.lib`, `USER32.lib`, `COMDLG32.lib`
 
 ## 📝 Limitations & Notes

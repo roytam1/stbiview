@@ -1174,6 +1174,7 @@ TrySTB:
 
     if(isWebp) free(pSrc);
     else if(isPCX) drpcx_free(pSrc);
+    else if(isTIFF) tiff_free(tiffimg);
     else if(isJXL) j40_free(&jxlimage);
     else stbi_image_free(pSrc); // Free the original stb_image buffer
 
@@ -1429,7 +1430,7 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam) 
             RECT rc;
             HRGN hrgn;
             HBRUSH hBrush;
-            int srcH, srcY;
+            int srcH, srcY, availW, srcW, destW;
             HDC hdc = BeginPaint(hwnd, &ps);
 
             GetClientRect(hwnd, &rc);
@@ -1451,15 +1452,22 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam) 
                     DeleteObject(hBrush);
 
                     // Win32s handles SetDIBitsToDevice much better than Memory DCs
-                    srcH = rc.bottom;
+                    availW = imgWidth - scrollX;
+                    if (availW < 0) availW = 0;
+                    srcW = min(rc.right, availW);
+                    destW = srcW;   // or scale proportionally if you actually want stretching
+                    srcH = min(rc.bottom, imgHeight - max(scrollY,0)); // similarly guard height
                     srcY = imgHeight - scrollY - srcH;
+                    if (srcY < 0) srcY = 0;
                     hrgn = CreateRectRgn(0, 0, min(rc.right,imgWidth), min(rc.bottom,imgHeight));
                     SelectClipRgn(hdc, hrgn);
                     StretchDIBits(hdc, 
-                        0, 0, rc.right, rc.bottom,
+                        0, 0, destW, srcH,      // dest rect matches clamped source
                         scrollX, srcY, 
-                        rc.right, srcH,
+                        srcW, srcH,
                         pRawData, &bmi, DIB_RGB_COLORS, SRCCOPY);
+                    SelectClipRgn(hdc, NULL);
+                    DeleteObject(hrgn);
                 } 
                 else {
                     // --- NT4/9x PATH: Double Buffered (Flicker-Free) ---
@@ -1478,13 +1486,18 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam) 
                     DeleteObject(hBrush);
 
                     // On NT4, we can even use StretchDIBits in the memory DC
-                    srcH = rc.bottom;
+                    availW = imgWidth - scrollX;
+                    if (availW < 0) availW = 0;
+                    srcW = min(rc.right, availW);
+                    destW = srcW;   // or scale proportionally if you actually want stretching
+                    srcH = min(rc.bottom, imgHeight - max(scrollY,0)); // similarly guard height
                     srcY = imgHeight - scrollY - srcH;
+                    if (srcY < 0) srcY = 0;
 
                     StretchDIBits(hMemDC, 
-                        0, 0, rc.right, rc.bottom,
+                        0, 0, destW, srcH,      // dest rect matches clamped source
                         scrollX, srcY, 
-                        rc.right, srcH,
+                        srcW, srcH,
                         pRawData, &bmi, DIB_RGB_COLORS, SRCCOPY);
 
                     // "Flip" the buffer: Copy the memory DC to the real screen DC

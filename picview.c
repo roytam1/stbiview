@@ -1094,7 +1094,11 @@ TrySTB:
     stride = ((imgW * 24 + 31) / 32) * 4;
     
     // Allocate the destination buffer for GDI
-    pDest = (unsigned char*)malloc(stride * imgH);
+    // NOTE: pad the allocation ¡X GDI/display drivers can read slightly
+    // past the nominal end of a 24bpp DIB buffer during internal color
+    // conversion. An exact-fit buffer can trigger StretchDIBits failures
+    // (or crashes) on some driver/OS combinations.
+    pDest = (unsigned char*)malloc(stride * imgH + 32768);
     if (!pDest) {
         if(isWebp) free(pSrc);
         else if(isPCX) drpcx_free(pSrc);

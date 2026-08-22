@@ -1098,7 +1098,7 @@ TrySTB:
     // past the nominal end of a 24bpp DIB buffer during internal color
     // conversion. An exact-fit buffer can trigger StretchDIBits failures
     // (or crashes) on some driver/OS combinations.
-    pDest = (unsigned char*)malloc(stride * imgH + 32768);
+    pDest = (unsigned char*)LocalAlloc(LMEM_FIXED, stride * imgH);
     if (!pDest) {
         if(isWebp) free(pSrc);
         else if(isPCX) drpcx_free(pSrc);
@@ -1162,7 +1162,7 @@ TrySTB:
     }
 
     // 5. Update Global State for Rendering
-    if (pRawData) free(pRawData); // Free previous image buffer
+    if (pRawData) LocalFree(pRawData); // Free previous image buffer
     pRawData = pDest;             // Point to our new GDI-compatible buffer
     imgWidth = imgW;
     imgHeight = imgH;
@@ -1712,7 +1712,7 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam) 
 
         case WM_DESTROY:
             if (hPalette) DeleteObject(hPalette);
-            if (pRawData) free(pRawData);
+            if (pRawData) LocalFree(pRawData);
             PostQuitMessage(0);
             return 0;
     }

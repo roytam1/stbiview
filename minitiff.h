@@ -1,5 +1,5 @@
 /*
-    minitiff_v4_c89.c
+    minitiff.h
 
     Small, human-readable TIFF decoder.
 
@@ -23,6 +23,7 @@
       - Orientation (tag 274), with pixels normalized to the displayed orientation
       - Generic UINT/STRING/raw tag access
       - Compression = 1   (none)
+      - Compression = 3 and 4 (CCITT)
       - Compression = 5   (LZW)
       - Compression = 32773 (PackBits)
       - Predictor = 1 and 2 for byte-oriented data
@@ -63,7 +64,7 @@
 
     Optional stb_image build:
 
-        cc -DMINITIFF_USE_STB_IMAGE -c minitiff_v4_c89.c
+        cc -DMINITIFF_USE_STB_IMAGE -c minitiff.h
 
     The application must arrange for stb_image's implementation to be built
     exactly once, for example:
@@ -76,7 +77,7 @@
         #define STB_IMAGE_IMPLEMENTATION
         #define MINITIFF_USE_STB_IMAGE
         #define MINITIFF_USE_STB_ZLIB
-        #include "minitiff_v4_c89.c"
+        #include "minitiff.h"
 */
 #ifndef _MINITFF_H
 #define _MINITFF_H
@@ -107,7 +108,7 @@
             #define STB_IMAGE_IMPLEMENTATION
             #define MINITIFF_USE_STB_IMAGE
             #define MINITIFF_USE_STB_ZLIB
-            #include "minitiff_v4_c89.c"
+            #include "minitiff.h"
 
         Do not compile stb_image.c separately in that configuration.
 */
@@ -199,6 +200,9 @@ typedef struct TIFF_Page {
     unsigned short predictor;
     unsigned short orientation;
     unsigned short sample_format;
+    unsigned short fill_order;
+    unsigned long group3_options;
+    unsigned long group4_options;
 
     unsigned short bits_per_sample[4];
     unsigned short bits_count;
@@ -613,6 +617,7 @@ static int tiff_parse_ifd(const TIFF_Context *tiff,
     page->predictor = 1;
     page->orientation = 1;
     page->sample_format = 1;
+    page->fill_order = 1;
 
     if (!tiff_range_ok(tiff, offset, 2))
         return 0;
@@ -775,6 +780,28 @@ static int tiff_parse_ifd(const TIFF_Context *tiff,
                 (unsigned short)value;
             break;
 
+        case 266: /* FillOrder */
+            if (!tiff_entry_get_u32(tiff, &entry, 0,
+                                    &value) ||
+                value > 65535UL)
+                return 0;
+
+            page->fill_order =
+                (unsigned short)value;
+            break;
+
+        case 292: /* Group3Options */
+            if (!tiff_entry_get_u32(tiff, &entry, 0,
+                                    &page->group3_options))
+                return 0;
+            break;
+
+        case 293: /* Group4Options */
+            if (!tiff_entry_get_u32(tiff, &entry, 0,
+                                    &page->group4_options))
+                return 0;
+            break;
+
         case 339: /* SampleFormat */
             if (!tiff_entry_get_u32(tiff, &entry, 0, &value) ||
                 value > 65535UL)
@@ -913,6 +940,8 @@ static int tiff_parse_ifd(const TIFF_Context *tiff,
         return 0;
 
     if (page->compression != 1 &&
+        page->compression != 3 &&
+        page->compression != 4 &&
         page->compression != 5 &&
         page->compression != 6 &&
         page->compression != 7 &&
@@ -921,11 +950,19 @@ static int tiff_parse_ifd(const TIFF_Context *tiff,
         page->compression != 32946)
         return 0;
 
+    if (page->fill_order != 1 &&
+        page->fill_order != 2)
+        return 0;
+
     if (page->predictor != 1 &&
         page->predictor != 2)
         return 0;
 
     if (page->photometric > 5)
+        return 0;
+
+    if ((page->compression == 3 || page->compression == 4) &&
+        page->samples_per_pixel != 1)
         return 0;
 
     if (page->photometric == 2 &&
@@ -970,6 +1007,10 @@ static int tiff_parse_ifd(const TIFF_Context *tiff,
         if (i != 0 && bits != page->bits_per_sample[0])
             return 0;
 
+        if ((page->compression == 3 || page->compression == 4) &&
+            bits != 1)
+            return 0;
+
         if (page->photometric == 2 && bits != 8 && bits != 16)
             return 0;
 
@@ -995,6 +1036,766 @@ static int tiff_parse_ifd(const TIFF_Context *tiff,
     return 1;
 }
 
+
+/* ------------------------------------------------------------------------- */
+/* CCITT Group 3/4 fax decoder                                              */
+/* ------------------------------------------------------------------------- */
+
+typedef struct TIFF_CCITT_Code {
+    unsigned char bits;
+    unsigned long code;
+    unsigned short run;
+} TIFF_CCITT_Code;
+
+typedef struct TIFF_CCITT_Mode {
+    unsigned char bits;
+    unsigned long code;
+    int value;
+} TIFF_CCITT_Mode;
+
+static const TIFF_CCITT_Code tiff_ccitt_white[] = {
+    {8, 53UL, 0}, /* 00110101 */
+    {6, 7UL, 1}, /* 000111 */
+    {4, 7UL, 2}, /* 0111 */
+    {4, 8UL, 3}, /* 1000 */
+    {4, 11UL, 4}, /* 1011 */
+    {4, 12UL, 5}, /* 1100 */
+    {4, 14UL, 6}, /* 1110 */
+    {4, 15UL, 7}, /* 1111 */
+    {5, 19UL, 8}, /* 10011 */
+    {5, 20UL, 9}, /* 10100 */
+    {5, 7UL, 10}, /* 00111 */
+    {5, 8UL, 11}, /* 01000 */
+    {6, 8UL, 12}, /* 001000 */
+    {6, 3UL, 13}, /* 000011 */
+    {6, 52UL, 14}, /* 110100 */
+    {6, 53UL, 15}, /* 110101 */
+    {6, 42UL, 16}, /* 101010 */
+    {6, 43UL, 17}, /* 101011 */
+    {7, 39UL, 18}, /* 0100111 */
+    {7, 12UL, 19}, /* 0001100 */
+    {7, 8UL, 20}, /* 0001000 */
+    {7, 23UL, 21}, /* 0010111 */
+    {7, 3UL, 22}, /* 0000011 */
+    {7, 4UL, 23}, /* 0000100 */
+    {7, 40UL, 24}, /* 0101000 */
+    {7, 43UL, 25}, /* 0101011 */
+    {7, 19UL, 26}, /* 0010011 */
+    {7, 36UL, 27}, /* 0100100 */
+    {7, 24UL, 28}, /* 0011000 */
+    {8, 2UL, 29}, /* 00000010 */
+    {8, 3UL, 30}, /* 00000011 */
+    {8, 26UL, 31}, /* 00011010 */
+    {8, 27UL, 32}, /* 00011011 */
+    {8, 18UL, 33}, /* 00010010 */
+    {8, 19UL, 34}, /* 00010011 */
+    {8, 20UL, 35}, /* 00010100 */
+    {8, 21UL, 36}, /* 00010101 */
+    {8, 22UL, 37}, /* 00010110 */
+    {8, 23UL, 38}, /* 00010111 */
+    {8, 40UL, 39}, /* 00101000 */
+    {8, 41UL, 40}, /* 00101001 */
+    {8, 42UL, 41}, /* 00101010 */
+    {8, 43UL, 42}, /* 00101011 */
+    {8, 44UL, 43}, /* 00101100 */
+    {8, 45UL, 44}, /* 00101101 */
+    {8, 4UL, 45}, /* 00000100 */
+    {8, 5UL, 46}, /* 00000101 */
+    {8, 10UL, 47}, /* 00001010 */
+    {8, 11UL, 48}, /* 00001011 */
+    {8, 82UL, 49}, /* 01010010 */
+    {8, 83UL, 50}, /* 01010011 */
+    {8, 84UL, 51}, /* 01010100 */
+    {8, 85UL, 52}, /* 01010101 */
+    {8, 36UL, 53}, /* 00100100 */
+    {8, 37UL, 54}, /* 00100101 */
+    {8, 88UL, 55}, /* 01011000 */
+    {8, 89UL, 56}, /* 01011001 */
+    {8, 90UL, 57}, /* 01011010 */
+    {8, 91UL, 58}, /* 01011011 */
+    {8, 74UL, 59}, /* 01001010 */
+    {8, 75UL, 60}, /* 01001011 */
+    {8, 50UL, 61}, /* 00110010 */
+    {8, 51UL, 62}, /* 00110011 */
+    {8, 52UL, 63}, /* 00110100 */
+    {5, 27UL, 64}, /* 11011 */
+    {5, 18UL, 128}, /* 10010 */
+    {6, 23UL, 192}, /* 010111 */
+    {7, 55UL, 256}, /* 0110111 */
+    {8, 54UL, 320}, /* 00110110 */
+    {8, 55UL, 384}, /* 00110111 */
+    {8, 100UL, 448}, /* 01100100 */
+    {8, 101UL, 512}, /* 01100101 */
+    {8, 104UL, 576}, /* 01101000 */
+    {8, 103UL, 640}, /* 01100111 */
+    {9, 204UL, 704}, /* 011001100 */
+    {9, 205UL, 768}, /* 011001101 */
+    {9, 210UL, 832}, /* 011010010 */
+    {9, 211UL, 896}, /* 011010011 */
+    {9, 212UL, 960}, /* 011010100 */
+    {9, 213UL, 1024}, /* 011010101 */
+    {9, 214UL, 1088}, /* 011010110 */
+    {9, 215UL, 1152}, /* 011010111 */
+    {9, 216UL, 1216}, /* 011011000 */
+    {9, 217UL, 1280}, /* 011011001 */
+    {9, 218UL, 1344}, /* 011011010 */
+    {9, 219UL, 1408}, /* 011011011 */
+    {9, 152UL, 1472}, /* 010011000 */
+    {9, 153UL, 1536}, /* 010011001 */
+    {9, 154UL, 1600}, /* 010011010 */
+    {6, 24UL, 1664}, /* 011000 */
+    {9, 155UL, 1728}, /* 010011011 */
+    {11, 8UL, 1792}, /* 00000001000 */
+    {11, 12UL, 1856}, /* 00000001100 */
+    {11, 13UL, 1920}, /* 00000001101 */
+    {12, 18UL, 1984}, /* 000000010010 */
+    {12, 19UL, 2048}, /* 000000010011 */
+    {12, 20UL, 2112}, /* 000000010100 */
+    {12, 21UL, 2176}, /* 000000010101 */
+    {12, 22UL, 2240}, /* 000000010110 */
+    {12, 23UL, 2304}, /* 000000010111 */
+    {12, 28UL, 2368}, /* 000000011100 */
+    {12, 29UL, 2432}, /* 000000011101 */
+    {12, 30UL, 2496}, /* 000000011110 */
+    {12, 31UL, 2560}, /* 000000011111 */
+};
+
+static const TIFF_CCITT_Code tiff_ccitt_black[] = {
+    {10, 55UL, 0}, /* 0000110111 */
+    {3, 2UL, 1}, /* 010 */
+    {2, 3UL, 2}, /* 11 */
+    {2, 2UL, 3}, /* 10 */
+    {3, 3UL, 4}, /* 011 */
+    {4, 3UL, 5}, /* 0011 */
+    {4, 2UL, 6}, /* 0010 */
+    {5, 3UL, 7}, /* 00011 */
+    {6, 5UL, 8}, /* 000101 */
+    {6, 4UL, 9}, /* 000100 */
+    {7, 4UL, 10}, /* 0000100 */
+    {7, 5UL, 11}, /* 0000101 */
+    {7, 7UL, 12}, /* 0000111 */
+    {8, 4UL, 13}, /* 00000100 */
+    {8, 7UL, 14}, /* 00000111 */
+    {9, 24UL, 15}, /* 000011000 */
+    {10, 23UL, 16}, /* 0000010111 */
+    {10, 24UL, 17}, /* 0000011000 */
+    {10, 8UL, 18}, /* 0000001000 */
+    {11, 103UL, 19}, /* 00001100111 */
+    {11, 104UL, 20}, /* 00001101000 */
+    {11, 108UL, 21}, /* 00001101100 */
+    {11, 55UL, 22}, /* 00000110111 */
+    {11, 40UL, 23}, /* 00000101000 */
+    {11, 23UL, 24}, /* 00000010111 */
+    {11, 24UL, 25}, /* 00000011000 */
+    {12, 202UL, 26}, /* 000011001010 */
+    {12, 203UL, 27}, /* 000011001011 */
+    {12, 204UL, 28}, /* 000011001100 */
+    {12, 205UL, 29}, /* 000011001101 */
+    {12, 104UL, 30}, /* 000001101000 */
+    {12, 105UL, 31}, /* 000001101001 */
+    {12, 106UL, 32}, /* 000001101010 */
+    {12, 107UL, 33}, /* 000001101011 */
+    {12, 210UL, 34}, /* 000011010010 */
+    {12, 211UL, 35}, /* 000011010011 */
+    {12, 212UL, 36}, /* 000011010100 */
+    {12, 213UL, 37}, /* 000011010101 */
+    {12, 214UL, 38}, /* 000011010110 */
+    {12, 215UL, 39}, /* 000011010111 */
+    {12, 108UL, 40}, /* 000001101100 */
+    {12, 109UL, 41}, /* 000001101101 */
+    {12, 218UL, 42}, /* 000011011010 */
+    {12, 219UL, 43}, /* 000011011011 */
+    {12, 84UL, 44}, /* 000001010100 */
+    {12, 85UL, 45}, /* 000001010101 */
+    {12, 86UL, 46}, /* 000001010110 */
+    {12, 87UL, 47}, /* 000001010111 */
+    {12, 100UL, 48}, /* 000001100100 */
+    {12, 101UL, 49}, /* 000001100101 */
+    {12, 82UL, 50}, /* 000001010010 */
+    {12, 83UL, 51}, /* 000001010011 */
+    {12, 36UL, 52}, /* 000000100100 */
+    {12, 55UL, 53}, /* 000000110111 */
+    {12, 56UL, 54}, /* 000000111000 */
+    {12, 39UL, 55}, /* 000000100111 */
+    {12, 40UL, 56}, /* 000000101000 */
+    {12, 88UL, 57}, /* 000001011000 */
+    {12, 89UL, 58}, /* 000001011001 */
+    {12, 43UL, 59}, /* 000000101011 */
+    {12, 44UL, 60}, /* 000000101100 */
+    {12, 90UL, 61}, /* 000001011010 */
+    {12, 102UL, 62}, /* 000001100110 */
+    {12, 103UL, 63}, /* 000001100111 */
+    {10, 15UL, 64}, /* 0000001111 */
+    {12, 200UL, 128}, /* 000011001000 */
+    {12, 201UL, 192}, /* 000011001001 */
+    {12, 91UL, 256}, /* 000001011011 */
+    {12, 51UL, 320}, /* 000000110011 */
+    {12, 52UL, 384}, /* 000000110100 */
+    {12, 53UL, 448}, /* 000000110101 */
+    {13, 108UL, 512}, /* 0000001101100 */
+    {13, 109UL, 576}, /* 0000001101101 */
+    {13, 74UL, 640}, /* 0000001001010 */
+    {13, 75UL, 704}, /* 0000001001011 */
+    {13, 76UL, 768}, /* 0000001001100 */
+    {13, 77UL, 832}, /* 0000001001101 */
+    {13, 114UL, 896}, /* 0000001110010 */
+    {13, 115UL, 960}, /* 0000001110011 */
+    {13, 116UL, 1024}, /* 0000001110100 */
+    {13, 117UL, 1088}, /* 0000001110101 */
+    {13, 118UL, 1152}, /* 0000001110110 */
+    {13, 119UL, 1216}, /* 0000001110111 */
+    {13, 82UL, 1280}, /* 0000001010010 */
+    {13, 83UL, 1344}, /* 0000001010011 */
+    {13, 84UL, 1408}, /* 0000001010100 */
+    {13, 85UL, 1472}, /* 0000001010101 */
+    {13, 90UL, 1536}, /* 0000001011010 */
+    {13, 91UL, 1600}, /* 0000001011011 */
+    {13, 100UL, 1664}, /* 0000001100100 */
+    {13, 101UL, 1728}, /* 0000001100101 */
+    {11, 8UL, 1792}, /* 00000001000 */
+    {11, 12UL, 1856}, /* 00000001100 */
+    {11, 13UL, 1920}, /* 00000001101 */
+    {12, 18UL, 1984}, /* 000000010010 */
+    {12, 19UL, 2048}, /* 000000010011 */
+    {12, 20UL, 2112}, /* 000000010100 */
+    {12, 21UL, 2176}, /* 000000010101 */
+    {12, 22UL, 2240}, /* 000000010110 */
+    {12, 23UL, 2304}, /* 000000010111 */
+    {12, 28UL, 2368}, /* 000000011100 */
+    {12, 29UL, 2432}, /* 000000011101 */
+    {12, 30UL, 2496}, /* 000000011110 */
+    {12, 31UL, 2560}, /* 000000011111 */
+};
+
+
+static const TIFF_CCITT_Mode tiff_ccitt_mode[] = {
+    {1, 1UL, 0},  /* vertical 0 */
+    {3, 3UL, 3},  /* vertical +1 */
+    {3, 2UL, 4},  /* vertical -1 */
+    {3, 1UL, 1},  /* horizontal */
+    {4, 1UL, 2},  /* pass */
+    {6, 3UL, 5},  /* vertical +2 */
+    {6, 2UL, 6},  /* vertical -2 */
+    {7, 3UL, 7},  /* vertical +3 */
+    {7, 2UL, 8},  /* vertical -3 */
+};
+
+static int tiff_ccitt_get_bit(const unsigned char *src,
+                              size_t src_size,
+                              size_t *bit_pos,
+                              unsigned short fill_order,
+                              int *bit)
+{
+    size_t byte_pos;
+    unsigned int bit_in_byte;
+    unsigned char mask;
+
+    if (*bit_pos >= src_size * 8)
+        return 0;
+
+    byte_pos = *bit_pos >> 3;
+    bit_in_byte = (unsigned int)(*bit_pos & 7);
+
+    if (fill_order == 2)
+        mask = (unsigned char)(1U << bit_in_byte);
+    else
+        mask = (unsigned char)(0x80U >> bit_in_byte);
+
+    *bit = (src[byte_pos] & mask) != 0;
+    ++*bit_pos;
+    return 1;
+}
+
+static int tiff_ccitt_find_code(const unsigned char *src,
+                                size_t src_size,
+                                size_t *bit_pos,
+                                unsigned short fill_order,
+                                const TIFF_CCITT_Code *table,
+                                size_t table_count,
+                                unsigned long *value)
+{
+    unsigned long code;
+    unsigned int bits;
+    size_t i;
+    int bit;
+
+    code = 0;
+
+    for (bits = 1; bits <= 13; ++bits) {
+        if (!tiff_ccitt_get_bit(src, src_size, bit_pos,
+                                fill_order, &bit))
+            return 0;
+
+        code = (code << 1) | (unsigned long)bit;
+
+        for (i = 0; i < table_count; ++i) {
+            if (table[i].bits == bits &&
+                table[i].code == code) {
+                *value = table[i].run;
+                return 1;
+            }
+        }
+    }
+
+    return 0;
+}
+
+static int tiff_ccitt_read_run(const unsigned char *src,
+                               size_t src_size,
+                               size_t *bit_pos,
+                               unsigned short fill_order,
+                               int white,
+                               unsigned long *run)
+{
+    const TIFF_CCITT_Code *table;
+    size_t table_count;
+    unsigned long value;
+    unsigned long total;
+
+    if (white) {
+        table = tiff_ccitt_white;
+        table_count = sizeof(tiff_ccitt_white) /
+                      sizeof(tiff_ccitt_white[0]);
+    }
+    else {
+        table = tiff_ccitt_black;
+        table_count = sizeof(tiff_ccitt_black) /
+                      sizeof(tiff_ccitt_black[0]);
+    }
+
+    total = 0;
+
+    do {
+        if (!tiff_ccitt_find_code(src, src_size, bit_pos,
+                                  fill_order, table,
+                                  table_count, &value))
+            return 0;
+
+        if (value == (unsigned long)-1)
+            return 0;
+
+        total += value;
+
+        /* A terminating code is less than 64. */
+        if (value < 64UL)
+            break;
+    } while (total <= 2623UL);
+
+    if (total > 2623UL)
+        return 0;
+
+    *run = total;
+    return 1;
+}
+
+static void tiff_ccitt_set_bit(unsigned char *row,
+                               unsigned long x,
+                               int value)
+{
+    unsigned char mask;
+
+    mask = (unsigned char)(0x80U >> (x & 7));
+
+    if (value)
+        row[x >> 3] |= mask;
+    else
+        row[x >> 3] &= (unsigned char)~mask;
+}
+
+static int tiff_ccitt_read_eol(const unsigned char *src,
+                               size_t src_size,
+                               size_t *bit_pos,
+                               unsigned short fill_order)
+{
+    unsigned long window;
+    unsigned int count;
+    int bit;
+
+    window = 0;
+    count = 0;
+
+    while (*bit_pos < src_size * 8) {
+        if (!tiff_ccitt_get_bit(src, src_size, bit_pos,
+                                fill_order, &bit))
+            return 0;
+
+        window = ((window << 1) | (unsigned long)bit) & 0xFFFUL;
+
+        if (count < 12)
+            ++count;
+
+        if (count == 12 && window == 1UL)
+            return 1;
+    }
+
+    return 0;
+}
+
+static void tiff_ccitt_fill_run(unsigned char *row,
+                                unsigned long start,
+                                unsigned long length,
+                                int white,
+                                unsigned long width)
+{
+    unsigned long end;
+    unsigned long x;
+
+    end = start + length;
+    if (end > width)
+        end = width;
+
+    for (x = start; x < end; ++x)
+        tiff_ccitt_set_bit(row, x, white ? 1 : 0);
+}
+
+static int tiff_ccitt_decode_1d_line(const unsigned char *src,
+                                     size_t src_size,
+                                     size_t *bit_pos,
+                                     unsigned short fill_order,
+                                     unsigned char *row,
+                                     unsigned long width)
+{
+    unsigned long x;
+    unsigned long run;
+    int white;
+
+    memset(row, 0, (size_t)((width + 7UL) / 8UL));
+
+    x = 0;
+    white = 1;
+
+    while (x < width) {
+        if (!tiff_ccitt_read_run(src, src_size, bit_pos,
+                                 fill_order, white, &run))
+            return 0;
+
+        if (run > width - x)
+            return 0;
+
+        tiff_ccitt_fill_run(row, x, run, white, width);
+        x += run;
+        white = !white;
+    }
+
+    return 1;
+}
+
+static unsigned long tiff_ccitt_find_b1(const unsigned char *ref,
+                                        unsigned long width,
+                                        unsigned long a0,
+                                        int white)
+{
+    unsigned long x;
+
+    x = a0 + 1UL;
+
+    while (x < width) {
+        int left;
+        int current;
+
+        left = (x == 0) ? white :
+               ((ref[(x - 1UL) >> 3] &
+                 (0x80U >> ((x - 1UL) & 7))) != 0);
+
+        current = ((ref[x >> 3] &
+                    (0x80U >> (x & 7))) != 0);
+
+        if (left == white && current != white)
+            break;
+
+        ++x;
+    }
+
+    return x;
+}
+
+static unsigned long tiff_ccitt_find_b2(const unsigned char *ref,
+                                        unsigned long width,
+                                        unsigned long b1,
+                                        int white)
+{
+    unsigned long x;
+
+    x = b1 + 1UL;
+
+    while (x < width) {
+        int left;
+        int current;
+
+        left = ((ref[(x - 1UL) >> 3] &
+                 (0x80U >> ((x - 1UL) & 7))) != 0);
+        current = ((ref[x >> 3] &
+                    (0x80U >> (x & 7))) != 0);
+
+        if (left != white && current == white)
+            break;
+
+        ++x;
+    }
+
+    return x;
+}
+
+static int tiff_ccitt_read_mode(const unsigned char *src,
+                                size_t src_size,
+                                size_t *bit_pos,
+                                unsigned short fill_order,
+                                int *mode)
+{
+    unsigned long code;
+    unsigned int bits;
+    size_t i;
+
+    code = 0;
+
+    for (bits = 1; bits <= 7; ++bits) {
+        int bit;
+
+        if (!tiff_ccitt_get_bit(src, src_size, bit_pos,
+                                fill_order, &bit))
+            return 0;
+
+        code = (code << 1) | (unsigned long)bit;
+
+        for (i = 0; i < sizeof(tiff_ccitt_mode) /
+                        sizeof(tiff_ccitt_mode[0]); ++i) {
+            if (tiff_ccitt_mode[i].bits == bits &&
+                tiff_ccitt_mode[i].code == code) {
+                *mode = (int)tiff_ccitt_mode[i].value;
+                return 1;
+            }
+        }
+    }
+
+    return 0;
+}
+
+static int tiff_ccitt_decode_2d_line(const unsigned char *src,
+                                     size_t src_size,
+                                     size_t *bit_pos,
+                                     unsigned short fill_order,
+                                     const unsigned char *reference,
+                                     unsigned char *row,
+                                     unsigned long width)
+{
+    unsigned long a0;
+    unsigned long b1;
+    unsigned long b2;
+    unsigned long n1;
+    unsigned long n2;
+    unsigned long x;
+    int white;
+    int mode;
+
+    memset(row, 0, (size_t)((width + 7UL) / 8UL));
+
+    a0 = 0;
+    white = 1;
+
+    while (a0 < width) {
+        if (!tiff_ccitt_read_mode(src, src_size, bit_pos,
+                                  fill_order, &mode))
+            return 0;
+
+        if (mode == 0) { /* Vertical 0 */
+            b1 = tiff_ccitt_find_b1(reference, width, a0, white);
+
+            if (b1 < a0)
+                return 0;
+
+            tiff_ccitt_fill_run(row, a0, b1 - a0,
+                                white, width);
+            a0 = b1;
+            white = !white;
+        }
+        else if (mode >= 3 && mode <= 8) {
+            b1 = tiff_ccitt_find_b1(reference, width, a0, white);
+
+            if (mode == 3)
+                b1 += 1UL;
+            else if (mode == 4 && b1 > 0)
+                b1 -= 1UL;
+            else if (mode == 5)
+                b1 += 2UL;
+            else if (mode == 6 && b1 >= 2UL)
+                b1 -= 2UL;
+            else if (mode == 7)
+                b1 += 3UL;
+            else if (mode == 8 && b1 >= 3UL)
+                b1 -= 3UL;
+
+            if (b1 > width)
+                return 0;
+
+            tiff_ccitt_fill_run(row, a0, b1 - a0,
+                                white, width);
+            a0 = b1;
+            white = !white;
+        }
+        else if (mode == 1) { /* Horizontal */
+            if (!tiff_ccitt_read_run(src, src_size, bit_pos,
+                                     fill_order, white, &n1))
+                return 0;
+
+            if (n1 > width - a0)
+                return 0;
+
+            tiff_ccitt_fill_run(row, a0, n1,
+                                white, width);
+            a0 += n1;
+            white = !white;
+
+            if (!tiff_ccitt_read_run(src, src_size, bit_pos,
+                                     fill_order, white, &n2))
+                return 0;
+
+            if (n2 > width - a0)
+                return 0;
+
+            tiff_ccitt_fill_run(row, a0, n2,
+                                white, width);
+            a0 += n2;
+            white = !white;
+        }
+        else if (mode == 2) { /* Pass */
+            b1 = tiff_ccitt_find_b1(reference, width, a0, white);
+            b2 = tiff_ccitt_find_b2(reference, width, b1, white);
+
+            if (b2 < a0)
+                return 0;
+
+            tiff_ccitt_fill_run(row, a0, b2 - a0,
+                                white, width);
+            a0 = b2;
+        }
+        else {
+            return 0;
+        }
+    }
+
+    /* Clear unused bits in the final byte. */
+    x = width & 7UL;
+    if (x != 0)
+        row[width >> 3] &= (unsigned char)(0xFFU << (8U - x));
+
+    return 1;
+}
+
+static int tiff_ccitt_decode(const unsigned char *src,
+                             size_t src_size,
+                             unsigned char *dst,
+                             size_t dst_size,
+                             unsigned long width,
+                             unsigned long rows,
+                             unsigned short compression,
+                             unsigned long group3_options,
+                             unsigned long group4_options,
+                             unsigned short fill_order,
+                             unsigned short photometric)
+{
+    size_t row_size;
+    size_t bit_pos;
+    unsigned long y;
+    unsigned char *reference;
+    int use_2d;
+    int byte_align;
+
+    (void)group4_options;
+
+    row_size = (size_t)((width + 7UL) / 8UL);
+
+    {
+        size_t expected_size;
+
+        if (!tiff_mul_size(row_size, (size_t)rows,
+                           &expected_size))
+            return 0;
+
+        if (dst_size != expected_size)
+            return 0;
+    }
+
+    reference = (unsigned char *)malloc(row_size);
+    if (!reference)
+        return 0;
+
+    memset(reference, 0, row_size);
+    bit_pos = 0;
+    use_2d = (compression == 3 &&
+              (group3_options & 1UL) != 0);
+    byte_align = (compression == 3 &&
+                  (group3_options & 4UL) != 0);
+
+    for (y = 0; y < rows; ++y) {
+        unsigned char *row;
+        int ok;
+
+        row = dst + (size_t)y * row_size;
+
+        if (compression == 3) {
+            if (!tiff_ccitt_read_eol(src, src_size, &bit_pos,
+                                     fill_order)) {
+                free(reference);
+                return 0;
+            }
+
+            if (byte_align)
+                bit_pos = (bit_pos + 7U) & ~(size_t)7U;
+        }
+
+        if (compression == 3 && use_2d) {
+            int two_d_line;
+            int tag_bit;
+
+            if (!tiff_ccitt_get_bit(src, src_size, &bit_pos,
+                                    fill_order, &tag_bit)) {
+                free(reference);
+                return 0;
+            }
+
+            /* Group 3 mixed mode: 0 = 2-D, 1 = 1-D. */
+            two_d_line = (tag_bit == 0);
+
+            if (two_d_line) {
+                ok = tiff_ccitt_decode_2d_line(
+                    src, src_size, &bit_pos, fill_order,
+                    reference, row, width);
+            }
+            else {
+                ok = tiff_ccitt_decode_1d_line(
+                    src, src_size, &bit_pos, fill_order,
+                    row, width);
+            }
+        }
+        else if (compression == 4) {
+            ok = tiff_ccitt_decode_2d_line(
+                src, src_size, &bit_pos, fill_order,
+                reference, row, width);
+        }
+        else {
+            ok = tiff_ccitt_decode_1d_line(
+                src, src_size, &bit_pos, fill_order,
+                row, width);
+        }
+
+        if (!ok) {
+            free(reference);
+            return 0;
+        }
+
+        memcpy(reference, row, row_size);
+    }
+
+    if (photometric == 0) {
+        size_t i;
+
+        for (i = 0; i < dst_size; ++i)
+            dst[i] = (unsigned char)~dst[i];
+    }
+
+    free(reference);
+    return 1;
+}
 
 /* ------------------------------------------------------------------------- */
 /* PackBits decoder                                                          */
@@ -1879,6 +2680,22 @@ static int tiff_decode_block(const TIFF_Context *tiff,
             return 0;
         memcpy(destination, tiff->data + offset, destination_size);
         return 1;
+
+    case 3:
+    case 4:
+        return tiff_ccitt_decode(
+            tiff->data + offset,
+            (size_t)byte_count,
+            destination,
+            destination_size,
+            block_width,
+            block_height,
+            page->compression,
+            page->group3_options,
+            page->group4_options,
+            page->fill_order,
+            page->photometric);
+
     case 5:
         return tiff_lzw_decode(tiff->data + offset, (size_t)byte_count, destination, destination_size);
     case 32773:

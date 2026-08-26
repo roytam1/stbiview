@@ -16,6 +16,8 @@
       - Strips and tiled images
       - RowsPerStrip
       - 1, 2, 4, 8 and 16 bit unsigned integer samples
+      - FillOrder = 1 and 2 for packed samples
+      - MaxSampleValue scaling for reduced-range samples
       - 1, 2, 4 and 8 bit palette images
       - 8 and 16 bit RGB and RGBA
       - PlanarConfiguration 1 and 2 (8/16-bit separate planes)
@@ -201,6 +203,7 @@ typedef struct TIFF_Page {
     unsigned short orientation;
     unsigned short sample_format;
     unsigned short fill_order;
+    unsigned long max_sample_value;
     unsigned long group3_options;
     unsigned long group4_options;
 
@@ -790,6 +793,15 @@ static int tiff_parse_ifd(const TIFF_Context *tiff,
                 (unsigned short)value;
             break;
 
+        case 281: /* MaxSampleValue */
+            if (!tiff_entry_get_u32(tiff, &entry, 0,
+                                    &value) ||
+                value > 65535UL)
+                return 0;
+
+            page->max_sample_value = value;
+            break;
+
         case 292: /* Group3Options */
             if (!tiff_entry_get_u32(tiff, &entry, 0,
                                     &page->group3_options))
@@ -912,6 +924,10 @@ static int tiff_parse_ifd(const TIFF_Context *tiff,
             page->bits_per_sample[i] = 8;
     }
 
+    if (page->max_sample_value == 0)
+        page->max_sample_value =
+            (1UL << page->bits_per_sample[0]) - 1UL;
+
     if (page->width == 0 ||
         page->height == 0)
         return 0;
@@ -937,6 +953,11 @@ static int tiff_parse_ifd(const TIFF_Context *tiff,
         return 0;
 
     if (page->sample_format != 1)
+        return 0;
+
+    if (page->max_sample_value == 0 ||
+        page->max_sample_value >
+        ((1UL << page->bits_per_sample[0]) - 1UL))
         return 0;
 
     if (page->compression != 1 &&
@@ -2385,9 +2406,20 @@ static void tiff_predictor_horizontal(unsigned char *data,
 /* Small-bit-depth sample extraction                                        */
 /* ------------------------------------------------------------------------- */
 
+static unsigned char tiff_reverse_bits(unsigned char value)
+{
+    value = (unsigned char)((value >> 4) | (value << 4));
+    value = (unsigned char)(((value & 0xCCU) >> 2) |
+                            ((value & 0x33U) << 2));
+    value = (unsigned char)(((value & 0xAAU) >> 1) |
+                            ((value & 0x55U) << 1));
+    return value;
+}
+
 static unsigned long tiff_get_sample(const unsigned char *row,
                                      size_t bit_position,
-                                     unsigned short bits)
+                                     unsigned short bits,
+                                     unsigned short fill_order)
 {
     unsigned char value;
     unsigned int shift;
@@ -2397,9 +2429,16 @@ static unsigned long tiff_get_sample(const unsigned char *row,
 
     value = row[bit_position >> 3];
 
+    /*
+        FillOrder = 2 stores the bits in each byte least-significant
+        bit first. Reverse the byte so the normal packed-sample
+        extraction below can still treat the first sample as MSB-first.
+    */
+    if (fill_order == 2)
+        value = tiff_reverse_bits(value);
+
     if (bits == 4) {
-        shift = (unsigned int)(4 -
-            ((bit_position & 7) >> 1) * 4);
+        shift = (unsigned int)(4 - (bit_position & 4));
         return (unsigned long)((value >> shift) & 15);
     }
 
@@ -2454,9 +2493,24 @@ static void tiff_put_u16_sample(const TIFF_Context *tiff,
     }
 }
 
-static unsigned char tiff_scale_u16(unsigned short value)
+static unsigned char tiff_scale_u16(unsigned short value,
+                                     unsigned long maximum)
 {
-    return (unsigned char)(value >> 8);
+    unsigned long scaled;
+
+    if (maximum == 0)
+        maximum = 65535UL;
+
+    if (maximum == 65535UL)
+        return (unsigned char)(value >> 8);
+
+    scaled = ((unsigned long)value * 255UL +
+              maximum / 2UL) / maximum;
+
+    if (scaled > 255UL)
+        scaled = 255UL;
+
+    return (unsigned char)scaled;
 }
 
 static void tiff_predictor_horizontal_16(const TIFF_Context *tiff,
@@ -2572,34 +2626,34 @@ static int tiff_convert_pixels(const TIFF_Context *tiff,
                     p = row + (size_t)x * page->samples_per_pixel * 2;
                     value = tiff_get_u16_sample(tiff, p);
                     if (page->photometric == 0)
-                        value = (unsigned short)(65535U - value);
-                    r = tiff_scale_u16(value);
+                        value = (unsigned short)(page->max_sample_value - value);
+                    r = tiff_scale_u16(value, page->max_sample_value);
                     g = r;
                     b = r;
                     if (page->samples_per_pixel >= 2)
-                        a = tiff_scale_u16(tiff_get_u16_sample(tiff, p + 2));
+                        a = tiff_scale_u16(tiff_get_u16_sample(tiff, p + 2), page->max_sample_value);
                 }
                 else {
                     unsigned long value;
-                    value = tiff_get_sample(row, base_bit, bits);
+                    value = tiff_get_sample(row, base_bit, bits, page->fill_order);
                     if (page->photometric == 0)
                         value = ((1UL << bits) - 1UL) - value;
                     r = tiff_scale_sample(value, bits);
                     g = r;
                     b = r;
                     if (page->samples_per_pixel >= 2)
-                        a = tiff_scale_sample(tiff_get_sample(row, base_bit + bits, bits), bits);
+                        a = tiff_scale_sample(tiff_get_sample(row, base_bit + bits, bits, page->fill_order), bits);
                 }
             }
             else if (page->photometric == 2) {
                 const unsigned char *pixel;
                 if (bits == 16) {
                     pixel = row + (size_t)x * page->samples_per_pixel * 2;
-                    r = tiff_scale_u16(tiff_get_u16_sample(tiff, pixel));
-                    g = tiff_scale_u16(tiff_get_u16_sample(tiff, pixel + 2));
-                    b = tiff_scale_u16(tiff_get_u16_sample(tiff, pixel + 4));
+                    r = tiff_scale_u16(tiff_get_u16_sample(tiff, pixel), page->max_sample_value);
+                    g = tiff_scale_u16(tiff_get_u16_sample(tiff, pixel + 2), page->max_sample_value);
+                    b = tiff_scale_u16(tiff_get_u16_sample(tiff, pixel + 4), page->max_sample_value);
                     if (page->samples_per_pixel >= 4)
-                        a = tiff_scale_u16(tiff_get_u16_sample(tiff, pixel + 6));
+                        a = tiff_scale_u16(tiff_get_u16_sample(tiff, pixel + 6), page->max_sample_value);
                 }
                 else {
                     pixel = row + (size_t)x * page->samples_per_pixel;
@@ -2612,12 +2666,12 @@ static int tiff_convert_pixels(const TIFF_Context *tiff,
             }
             else if (page->photometric == 3) {
                 unsigned long index;
-                index = tiff_get_sample(row, base_bit, bits);
+                index = tiff_get_sample(row, base_bit, bits, page->fill_order);
                 r = tiff_palette_value(page, index, 0);
                 g = tiff_palette_value(page, index, 1);
                 b = tiff_palette_value(page, index, 2);
                 if (page->samples_per_pixel >= 2)
-                    a = tiff_scale_sample(tiff_get_sample(row, base_bit + bits, bits), bits);
+                    a = tiff_scale_sample(tiff_get_sample(row, base_bit + bits, bits, page->fill_order), bits);
             }
             else if (page->photometric == 5) {
                 const unsigned char *pixel;
@@ -2628,6 +2682,16 @@ static int tiff_convert_pixels(const TIFF_Context *tiff,
                     m = tiff_get_u16_sample(tiff, pixel + 2);
                     yy = tiff_get_u16_sample(tiff, pixel + 4);
                     k = tiff_get_u16_sample(tiff, pixel + 6);
+                    if (page->max_sample_value != 65535UL) {
+                        c = (c * 65535UL + page->max_sample_value / 2UL) /
+                            page->max_sample_value;
+                        m = (m * 65535UL + page->max_sample_value / 2UL) /
+                            page->max_sample_value;
+                        yy = (yy * 65535UL + page->max_sample_value / 2UL) /
+                             page->max_sample_value;
+                        k = (k * 65535UL + page->max_sample_value / 2UL) /
+                            page->max_sample_value;
+                    }
                     r = (unsigned char)(((65535UL - c) * (65535UL - k)) / 16842495UL);
                     g = (unsigned char)(((65535UL - m) * (65535UL - k)) / 16842495UL);
                     b = (unsigned char)(((65535UL - yy) * (65535UL - k)) / 16842495UL);

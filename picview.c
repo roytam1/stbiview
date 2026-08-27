@@ -668,6 +668,7 @@ BOOL SaveRawBufferToBMP(const char* szFileName) {
     return TRUE;
 }
 
+/* Internal Decoders are moved to external file */
 #include "decoders.h"
 
 void LoadImageFromPath(HWND hwnd, char* filePath) {

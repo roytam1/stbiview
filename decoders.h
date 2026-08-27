@@ -1,3 +1,5 @@
+/* Internal Decoder: XBM format */
+
 unsigned char* LoadXBM(const char* szPath, int* w, int* h) {
     char line[256];
     int width = 0, height = 0, bytesPerRow;
@@ -38,6 +40,8 @@ unsigned char* LoadXBM(const char* szPath, int* w, int* h) {
     *w = width; *h = height;
     return pRGB;
 }
+
+/* Internal Decoder: XPM format */
 
 unsigned char* LoadXPM(const char* szPath, int* w, int* h) {
     typedef struct { char key[4]; BYTE r, g, b; } XPM_COLOR;
@@ -102,6 +106,8 @@ TryNextLine:
     *w = width; *h = height;
     return pRGB;
 }
+
+/* Internal Decoder: QOI format */
 
 unsigned char* LoadQOI(const char* szPath, int* w, int* h) {
     unsigned int magic;
@@ -170,6 +176,8 @@ unsigned char* LoadQOI(const char* szPath, int* w, int* h) {
     *w = (int)width; *h = (int)height;
     return pRGB;
 }
+
+/* Internal Decoder: MSP format */
 
 typedef struct {
     WORD Key1;        // Magic number: 0x6144 ("aD") or 0x694c ("iL") depending on version

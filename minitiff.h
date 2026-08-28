@@ -213,6 +213,8 @@ typedef struct TIFF_Page {
     unsigned short extra_samples[4];
     unsigned short extra_count;
 
+    unsigned short rgb555;
+
     unsigned long *strip_offsets;
     unsigned long *strip_byte_counts;
     unsigned long strip_count;
@@ -987,6 +989,7 @@ static int tiff_parse_ifd(const TIFF_Context *tiff,
         return 0;
 
     if (page->photometric == 2 &&
+        !page->rgb555 &&
         page->samples_per_pixel < 3)
         return 0;
 
@@ -1021,8 +1024,7 @@ static int tiff_parse_ifd(const TIFF_Context *tiff,
     for (i = 0; i < page->bits_count; ++i) {
         unsigned short bits = page->bits_per_sample[i];
 
-        if (bits != 1 && bits != 2 &&
-            bits != 4 && bits != 8 && bits != 16)
+        if (bits < 1 || bits > 16)
             return 0;
 
         if (i != 0 && bits != page->bits_per_sample[0])
@@ -1030,12 +1032,6 @@ static int tiff_parse_ifd(const TIFF_Context *tiff,
 
         if ((page->compression == 3 || page->compression == 4) &&
             bits != 1)
-            return 0;
-
-        if (page->photometric == 2 && bits != 8 && bits != 16)
-            return 0;
-
-        if (page->photometric == 5 && bits != 8 && bits != 16)
             return 0;
     }
 
@@ -1052,6 +1048,19 @@ static int tiff_parse_ifd(const TIFF_Context *tiff,
 #ifndef MINITIFF_USE_STB_ZLIB
         return 0;
 #endif
+    }
+
+    /*
+        Heuristic for antique TIFFs that store RGB555 data but tag it
+        as 16-bit grayscale.  Detect: BitsPerSample=16, SamplesPerPixel=1,
+        PhotometricInterpretation=0 or 1, MaxSampleValue=32767.
+    */
+    if (page->bits_per_sample[0] == 16 &&
+        page->samples_per_pixel == 1 &&
+        (page->photometric == 0 || page->photometric == 1) &&
+        page->max_sample_value == 32767UL) {
+        page->rgb555 = 1;
+        page->photometric = 2;
     }
 
     return 1;
@@ -2406,51 +2415,48 @@ static void tiff_predictor_horizontal(unsigned char *data,
 /* Small-bit-depth sample extraction                                        */
 /* ------------------------------------------------------------------------- */
 
-static unsigned char tiff_reverse_bits(unsigned char value)
-{
-    value = (unsigned char)((value >> 4) | (value << 4));
-    value = (unsigned char)(((value & 0xCCU) >> 2) |
-                            ((value & 0x33U) << 2));
-    value = (unsigned char)(((value & 0xAAU) >> 1) |
-                            ((value & 0x55U) << 1));
-    return value;
-}
-
 static unsigned long tiff_get_sample(const unsigned char *row,
                                      size_t bit_position,
                                      unsigned short bits,
                                      unsigned short fill_order)
 {
-    unsigned char value;
+    unsigned int byte_offset;
+    unsigned int bit_offset;
+    unsigned int bytes_needed;
+    unsigned long val;
     unsigned int shift;
+    unsigned int i;
 
     if (bits == 8)
         return row[bit_position >> 3];
 
-    value = row[bit_position >> 3];
+    byte_offset = (unsigned int)(bit_position >> 3);
+    bit_offset = (unsigned int)(bit_position & 7);
+
+    bytes_needed = (bit_offset + bits + 7U) / 8U;
+    if (bytes_needed > 2U)
+        bytes_needed = 2U;
+
+    val = 0;
+    for (i = 0; i < bytes_needed; ++i)
+        val = (val << 8) | (unsigned long)row[byte_offset + i];
 
     /*
-        FillOrder = 2 stores the bits in each byte least-significant
-        bit first. Reverse the byte so the normal packed-sample
-        extraction below can still treat the first sample as MSB-first.
+        FillOrder = 2 with byte-aligned samples (bits divides 8):
+        swap the order of samples within each byte without changing
+        their values.  For example, 4-bit: swap nibble order so
+        pixel 0 reads the low nibble instead of the high nibble.
     */
-    if (fill_order == 2)
-        value = tiff_reverse_bits(value);
-
-    if (bits == 4) {
-        shift = (unsigned int)(4 - (bit_position & 4));
-        return (unsigned long)((value >> shift) & 15);
+    if (fill_order == 2 && bytes_needed == 1 && (8U % bits) == 0U) {
+        unsigned int samples_per_byte = 8U / bits;
+        unsigned int sample_index = bit_offset / bits;
+        shift = bits * sample_index;
+    }
+    else {
+        shift = (unsigned int)(bytes_needed * 8U - bit_offset - bits);
     }
 
-    if (bits == 2) {
-        shift = (unsigned int)(6 -
-            ((bit_position & 7) >> 1) * 2);
-        return (unsigned long)((value >> shift) & 3);
-    }
-
-    /* bits == 1 */
-    shift = (unsigned int)(7 - (bit_position & 7));
-    return (unsigned long)((value >> shift) & 1);
+    return (val >> shift) & ((1UL << bits) - 1UL);
 }
 
 
@@ -2647,7 +2653,15 @@ static int tiff_convert_pixels(const TIFF_Context *tiff,
             }
             else if (page->photometric == 2) {
                 const unsigned char *pixel;
-                if (bits == 16) {
+                if (page->rgb555) {
+                    unsigned long v;
+                    pixel = row + (size_t)x * 2;
+                    v = tiff_get_u16_sample(tiff, pixel);
+                    g = (unsigned char)(((v >> 10) & 0x1FU) * 255 / 31);
+                    r = (unsigned char)(((v >> 5) & 0x1FU) * 255 / 31);
+                    b = (unsigned char)((v & 0x1FU) * 255 / 31);
+                }
+                else if (bits == 16) {
                     pixel = row + (size_t)x * page->samples_per_pixel * 2;
                     r = tiff_scale_u16(tiff_get_u16_sample(tiff, pixel), page->max_sample_value);
                     g = tiff_scale_u16(tiff_get_u16_sample(tiff, pixel + 2), page->max_sample_value);
@@ -2655,13 +2669,24 @@ static int tiff_convert_pixels(const TIFF_Context *tiff,
                     if (page->samples_per_pixel >= 4)
                         a = tiff_scale_u16(tiff_get_u16_sample(tiff, pixel + 6), page->max_sample_value);
                 }
-                else {
+                else if (bits == 8) {
                     pixel = row + (size_t)x * page->samples_per_pixel;
                     r = pixel[0];
                     g = pixel[1];
                     b = pixel[2];
                     if (page->samples_per_pixel >= 4)
                         a = pixel[3];
+                }
+                else {
+                    r = tiff_scale_sample(
+                        tiff_get_sample(row, base_bit, bits, page->fill_order), bits);
+                    g = tiff_scale_sample(
+                        tiff_get_sample(row, base_bit + (size_t)bits, bits, page->fill_order), bits);
+                    b = tiff_scale_sample(
+                        tiff_get_sample(row, base_bit + (size_t)bits * 2, bits, page->fill_order), bits);
+                    if (page->samples_per_pixel >= 4)
+                        a = tiff_scale_sample(
+                            tiff_get_sample(row, base_bit + (size_t)bits * 3, bits, page->fill_order), bits);
                 }
             }
             else if (page->photometric == 3) {

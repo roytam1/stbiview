@@ -11,6 +11,10 @@
 #define DR_PCX_IMPLEMENTATION
 #include "dr_pcx.h"
 
+/* stb_pic2 for PIC2 (.p2) image format */
+#define STB_PIC2_IMPLEMENTATION
+#include "stb_pic2.h"
+
 /* j40 for JPEG XL (.jxl) image format */
 #define J40_CONFIRM_THAT_THIS_IS_EXPERIMENTAL_AND_POTENTIALLY_UNSAFE
 #define J40_IMPLEMENTATION

@@ -1,3 +1,29 @@
+/* stb_image for various image formats */
+#define STB_IMAGE_IMPLEMENTATION
+#define STBI_NO_SIMD
+#include "stb_image.h"
+
+/* simplewebp for WebP image format */
+#define SIMPLEWEBP_IMPLEMENTATION
+#include "simplewebp.h"
+
+/* dr_pcx for PCX image format */
+#define DR_PCX_IMPLEMENTATION
+#include "dr_pcx.h"
+
+/* j40 for JPEG XL (.jxl) image format */
+#define J40_CONFIRM_THAT_THIS_IS_EXPERIMENTAL_AND_POTENTIALLY_UNSAFE
+#define J40_IMPLEMENTATION
+#include "j40.h"
+#include "j40.h"
+
+/* MiniTIFF for TIFF image format */
+#define MINITIFF_IMPLEMENTATION
+#undef STB_IMAGE_IMPLEMENTATION // already included, so no need to include stbi function body
+#define MINITIFF_USE_STB_IMAGE
+#define MINITIFF_USE_STB_ZLIB
+#include "minitiff.h"
+
 /* Internal Decoder: XBM format */
 
 unsigned char* LoadXBM(const char* szPath, int* w, int* h) {

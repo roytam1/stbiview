@@ -8,26 +8,8 @@
 #include "resource.h"
 #include "deffix.h"
 
-#define STB_IMAGE_IMPLEMENTATION
-#define STBI_NO_SIMD
-#include "stb_image.h"
-
-#define SIMPLEWEBP_IMPLEMENTATION
-#include "simplewebp.h"
-
-#define DR_PCX_IMPLEMENTATION
-#include "dr_pcx.h"
-
-#define J40_CONFIRM_THAT_THIS_IS_EXPERIMENTAL_AND_POTENTIALLY_UNSAFE
-#define J40_IMPLEMENTATION
-#include "j40.h"
-#include "j40.h"
-
-#define MINITIFF_IMPLEMENTATION
-#undef STB_IMAGE_IMPLEMENTATION // already included, so no need to include stbi function body
-#define MINITIFF_USE_STB_IMAGE
-#define MINITIFF_USE_STB_ZLIB
-#include "minitiff.h"
+/* Decoders are moved to external file */
+#include "decoders.h"
 
 /* MyVerInfo from GreenPad */
 /* MYVERINFO defination */
@@ -667,9 +649,6 @@ BOOL SaveRawBufferToBMP(const char* szFileName) {
     CloseHandle(hFile);
     return TRUE;
 }
-
-/* Internal Decoders are moved to external file */
-#include "decoders.h"
 
 void LoadImageFromPath(HWND hwnd, char* filePath) {
     int imgW = 0, imgH = 0, channels, bpp, stride, x, y;

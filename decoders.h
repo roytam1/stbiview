@@ -30,8 +30,14 @@
 
 #ifndef PICVIEW_NO_AVIF
 /* stb_avif for AVIF image format */
+#ifdef _M_PPC
+#pragma optimize("g", off)
+#endif
 #define STB_AVIF_IMPLEMENTATION
 #include "stb_avif.h"
+#ifdef _M_PPC
+#pragma optimize("g", on)
+#endif
 #endif
 
 /* Internal Decoder: XBM format */

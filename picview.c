@@ -724,6 +724,7 @@ void LoadImageFromPath(HWND hwnd, char* filePath) {
             }
         }
     }
+#ifndef PICVIEW_NO_AVIF
     else
     if(fileExt &&
         (stricmp(fileExt,".avif") == 0 ||
@@ -740,6 +741,7 @@ void LoadImageFromPath(HWND hwnd, char* filePath) {
             }
         }
     }
+#endif
     else
     if(fileExt && stricmp(fileExt,".pcx") == 0) {
         isPCX = 1;

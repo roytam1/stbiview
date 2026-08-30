@@ -28,9 +28,11 @@
 #define MINITIFF_USE_STB_ZLIB
 #include "minitiff.h"
 
+#ifndef PICVIEW_NO_AVIF
 /* stb_avif for AVIF image format */
 #define STB_AVIF_IMPLEMENTATION
 #include "stb_avif.h"
+#endif
 
 /* Internal Decoder: XBM format */
 

@@ -33,6 +33,7 @@
 #ifdef _M_PPC
 #pragma optimize("g", off)
 #endif
+#define STB_AVIF_DEBLOCK
 #define STB_AVIF_IMPLEMENTATION
 #include "stb_avif.h"
 #ifdef _M_PPC

@@ -28,6 +28,10 @@
 #define MINITIFF_USE_STB_ZLIB
 #include "minitiff.h"
 
+/* stb_avif for AVIF image format */
+#define STB_AVIF_IMPLEMENTATION
+#include "stb_avif.h"
+
 /* Internal Decoder: XBM format */
 
 unsigned char* LoadXBM(const char* szPath, int* w, int* h) {

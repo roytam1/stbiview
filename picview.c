@@ -658,7 +658,7 @@ void LoadImageFromPath(HWND hwnd, char* filePath) {
     simplewebp *swebp;
     j40_image jxlimage;
     MiniTIFF_Image *tiffimg;
-    int isWebp = 0, isJXL = 0, isPCX = 0, isTIFF = 0, swRet;
+    int isWebp = 0, isJXL = 0, isPCX = 0, isTIFF = 0, isAVIF = 0, swRet;
     char errBuf[MAX_PATH + 50];
 
     UpdateWindowTitle(hwnd, "Loading...");
@@ -721,6 +721,22 @@ void LoadImageFromPath(HWND hwnd, char* filePath) {
                 pSrc[x * 3 + 0] = pSrc[x * 4 + (y * (pixels.stride_bytes - imgW*4)) + 0];
                 pSrc[x * 3 + 1] = pSrc[x * 4 + (y * (pixels.stride_bytes - imgW*4)) + 1];
                 pSrc[x * 3 + 2] = pSrc[x * 4 + (y * (pixels.stride_bytes - imgW*4)) + 2];
+            }
+        }
+    }
+    else
+    if(fileExt &&
+        (stricmp(fileExt,".avif") == 0 ||
+         stricmp(fileExt,".ivf") == 0)) {
+        int channels = 0;
+        isAVIF = 1;
+        pSrc = stb_avif_load_from_file(filePath, &imgW, &imgH, &channels, 4);
+        if(pSrc) {
+            /* transform rgba to rgb in-place */
+            for(x=0; x < imgW*imgH; x++) {
+                pSrc[x * 3 + 0] = pSrc[x * 4 + 0];
+                pSrc[x * 3 + 1] = pSrc[x * 4 + 1];
+                pSrc[x * 3 + 2] = pSrc[x * 4 + 2];
             }
         }
     }
@@ -805,6 +821,7 @@ TrySTB:
         else if(isPCX) drpcx_free(pSrc);
         else if(isTIFF) tiff_free(tiffimg);
         else if(isJXL) j40_free(&jxlimage);
+        else if(isAVIF) stb_avif_free(pSrc);
         else stbi_image_free(pSrc); // Free the original stb_image buffer
         MessageBox(hwnd, "Out of memory", "Error", MB_ICONERROR);
         return;
@@ -881,6 +898,7 @@ TrySTB:
     else if(isPCX) drpcx_free(pSrc);
     else if(isTIFF) tiff_free(tiffimg);
     else if(isJXL) j40_free(&jxlimage);
+    else if(isAVIF) stb_avif_free(pSrc);
     else stbi_image_free(pSrc); // Free the original stb_image buffer
 
     // Copy filename to global

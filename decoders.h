@@ -30,13 +30,13 @@
 
 #ifndef PICVIEW_NO_AVIF
 /* stb_avif for AVIF image format */
-#ifdef _M_PPC
+#if defined(_M_PPC) || (defined(_M_IX86) && defined(_MSC_VER) && _MSC_VER < 1000)
 #pragma optimize("g", off)
 #endif
 #define STB_AVIF_DEBLOCK
 #define STB_AVIF_IMPLEMENTATION
 #include "stb_avif.h"
-#ifdef _M_PPC
+#if defined(_M_PPC) || (defined(_M_IX86) && defined(_MSC_VER) && _MSC_VER < 1000)
 #pragma optimize("g", on)
 #endif
 #endif

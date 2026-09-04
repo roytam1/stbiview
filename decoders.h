@@ -547,3 +547,146 @@ fail:
     free(flag); free(pixel0); free(pic); free(rgb);
     return NULL;
 }
+
+/* Internal Decoder: Y4M format */
+
+#ifndef CLAMP
+#define CLAMP(v) ((v) < 0 ? 0 : ((v) > 255 ? 255 : (v)))
+#endif
+
+unsigned char* LoadY4M(const char* szPath, int* w, int* h) {
+    FILE* f;
+    char header[256];
+    char* p;
+    int pos, ch;
+    int width, height, chromaType;
+    int ySize, uvWidth, uvHeight, uvSize;
+    unsigned char* pY;
+    unsigned char* pU;
+    unsigned char* pV;
+    unsigned char* pRGB;
+    int x, y, uvX, uvY;
+    int Y, U, V;
+    int r, g, b;
+    long idx;
+
+    f = fopen(szPath, "rb");
+    if (!f) return NULL;
+
+    /* 1. Parse Y4M Stream Header */
+    pos = 0;
+    while ((ch = fgetc(f)) != EOF && ch != '\n' && pos < 255) {
+        header[pos++] = (char)ch;
+    }
+    header[pos] = '\0';
+
+    if (strncmp(header, "YUV4MPEG2", 9) != 0) {
+        fclose(f);
+        return NULL;
+    }
+
+    width = 0;
+    height = 0;
+    chromaType = 420; /* Default chroma subsampling (420, 422, 444) */
+
+    p = header + 9;
+    while (*p) {
+        while (*p == ' ') p++;
+        if (*p == 'W') width = atoi(p + 1);
+        else if (*p == 'H') height = atoi(p + 1);
+        else if (*p == 'C') {
+            if (strncmp(p + 1, "444", 3) == 0) chromaType = 444;
+            else if (strncmp(p + 1, "422", 3) == 0) chromaType = 422;
+            else if (strncmp(p + 1, "420", 3) == 0) chromaType = 420;
+        }
+        while (*p && *p != ' ') p++;
+    }
+
+    if (width <= 0 || height <= 0) {
+        fclose(f);
+        return NULL;
+    }
+
+    /* 2. Parse Frame Header */
+    pos = 0;
+    while ((ch = fgetc(f)) != EOF && ch != '\n' && pos < 255) {
+        header[pos++] = (char)ch;
+    }
+    header[pos] = '\0';
+
+    if (strncmp(header, "FRAME", 5) != 0) {
+        fclose(f);
+        return NULL;
+    }
+
+    /* 3. Allocate Y, U, V Plane Buffers */
+    ySize = width * height;
+    uvWidth = (chromaType == 444) ? width : ((width + 1) >> 1);
+    uvHeight = (chromaType == 420) ? ((height + 1) >> 1) : height;
+    uvSize = uvWidth * uvHeight;
+
+    pY = (unsigned char*)malloc((size_t)ySize);
+    pU = (unsigned char*)malloc((size_t)uvSize);
+    pV = (unsigned char*)malloc((size_t)uvSize);
+
+    if (!pY || !pU || !pV) {
+        if (pY) free(pY);
+        if (pU) free(pU);
+        if (pV) free(pV);
+        fclose(f);
+        return NULL;
+    }
+
+    /* Read Y, U, V raw planes sequentially */
+    if (fread(pY, 1, ySize, f) != (size_t)ySize ||
+        fread(pU, 1, uvSize, f) != (size_t)uvSize ||
+        fread(pV, 1, uvSize, f) != (size_t)uvSize) {
+        free(pY); free(pU); free(pV);
+        fclose(f);
+        return NULL;
+    }
+
+    fclose(f);
+
+    /* 4. Allocate Destination 24-bit RGB Buffer */
+    pRGB = (unsigned char*)malloc((size_t)width * (size_t)height * 3);
+    if (!pRGB) {
+        free(pY); free(pU); free(pV);
+        return NULL;
+    }
+
+    /* 5. Integer-Only BT.601 YUV -> RGB Conversion (Fixed-point scaling) */
+    for (y = 0; y < height; y++) {
+        uvY = (chromaType == 420) ? (y >> 1) : y;
+
+        for (x = 0; x < width; x++) {
+            uvX = (chromaType == 444) ? x : (x >> 1);
+
+            Y = pY[y * width + x];
+            U = pU[uvY * uvWidth + uvX] - 128;
+            V = pV[uvY * uvWidth + uvX] - 128;
+
+            /* Integer approximations:
+             * R = Y + 1.402 * V         => Y + ((359 * V) >> 8)
+             * G = Y - 0.3441 * U - 0.7141 * V => Y - ((88 * U + 183 * V) >> 8)
+             * B = Y + 1.772 * U         => Y + ((454 * U) >> 8)
+             */
+            r = Y + ((359 * V) >> 8);
+            g = Y - ((88 * U + 183 * V) >> 8);
+            b = Y + ((454 * U) >> 8);
+
+            idx = ((long)y * width + x) * 3;
+            pRGB[idx + 0] = (unsigned char)CLAMP(r);
+            pRGB[idx + 1] = (unsigned char)CLAMP(g);
+            pRGB[idx + 2] = (unsigned char)CLAMP(b);
+        }
+    }
+
+    free(pY);
+    free(pU);
+    free(pV);
+
+    *w = width;
+    *h = height;
+    return pRGB;
+}

@@ -4338,7 +4338,11 @@ J40__STATIC_RETURNS_ERR j40__inverse_transform(j40__st *st, j40__modular *m);
 
 #ifdef J40_IMPLEMENTATION
 #define J40__X(x,y,z) {x,y,z}, {-(x),-(y),-(z)}
+#ifdef _MSC_VER
 #define J40__XX(a,b,c,d,e,f) J40__X ## a, J40__X ## b, J40__X ## c, J40__X ## d, J40__X ## e, J40__X ## f
+#else
+#define J40__XX(a,b,c,d,e,f) J40__X a, J40__X b, J40__X c, J40__X d, J40__X e, J40__X f
+#endif
 static const int16_t J40__PALETTE_DELTAS[144][3] = { // the first entry is a duplicate and skipped
 	J40__XX((0, 0, 0), (4, 4, 4), (11, 0, 0), (0, 0, -13), (0, -12, 0), (-10, -10, -10)),
 	J40__XX((-18, -18, -18), (-27, -27, -27), (-18, -18, 0), (0, 0, -32), (-32, 0, 0), (-37, -37, -37)),
@@ -8500,7 +8504,11 @@ J40_API j40_pixels_u8x4 j40_frame_pixels_u8x4(const j40_frame *frame, int32_t ch
 	// on error, return this placeholder image (TODO should this include an error message?)
 	#define J40__U8X4_THIRD(a,b,c,d,e,f,g) 255,0,0,a*255, 255,0,0,b*255, 255,0,0,c*255, \
 		255,0,0,d*255, 255,0,0,e*255, 255,0,0,f*255, 255,0,0,g*255
+	#ifdef _MSC_VER
 	#define J40__U8X4_ROW(aa,bb,cc) J40__U8X4_THIRD ## aa, J40__U8X4_THIRD ## bb, J40__U8X4_THIRD ## cc
+	#else
+	#define J40__U8X4_ROW(aa,bb,cc) J40__U8X4_THIRD aa, J40__U8X4_THIRD bb, J40__U8X4_THIRD cc
+	#endif
 	static const uint8_t ERROR_PIXELS_DATA[] = {
 		J40__U8X4_ROW((1,1,1,1,1,1,1),(1,1,1,1,1,1,1),(1,1,1,1,1,1,1)),
 		J40__U8X4_ROW((1,0,0,0,1,1,1),(1,1,1,1,1,1,1),(1,1,1,1,1,1,1)),

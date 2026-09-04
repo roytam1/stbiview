@@ -672,9 +672,12 @@ void LoadImageFromPath(HWND hwnd, char* filePath) {
         // Try to load with simplewebp
         swRet = simplewebp_load_from_filename(filePath, NULL, &swebp);
         if (swRet == SIMPLEWEBP_NO_ERROR) {
+            size_t s_W, s_H;
             isWebp = 1;
             // Get image dimensions from webp
-            simplewebp_get_dimensions(swebp, &imgW, &imgH);
+            simplewebp_get_dimensions(swebp, &s_W, &s_H);
+            imgW = s_W;
+            imgH = s_H;
 
             // Allocate memory for simplewebp output buffer (in RGBA form)
             pSrc = malloc(imgW * imgH * 4);
@@ -731,15 +734,7 @@ void LoadImageFromPath(HWND hwnd, char* filePath) {
          stricmp(fileExt,".ivf") == 0)) {
         int channels = 0;
         isAVIF = 1;
-        pSrc = stb_avif_load_from_file(filePath, &imgW, &imgH, &channels, 4);
-        if(pSrc) {
-            /* transform rgba to rgb in-place */
-            for(x=0; x < imgW*imgH; x++) {
-                pSrc[x * 3 + 0] = pSrc[x * 4 + 0];
-                pSrc[x * 3 + 1] = pSrc[x * 4 + 1];
-                pSrc[x * 3 + 2] = pSrc[x * 4 + 2];
-            }
-        }
+        pSrc = stb_avif_load_from_file(filePath, &imgW, &imgH, &channels, 3);
     }
 #endif
     else
@@ -818,7 +813,7 @@ TrySTB:
     stride = ((imgW * 24 + 31) / 32) * 4;
     
     // Allocate the destination buffer for GDI
-    // NOTE: pad the allocation ¡X GDI/display drivers can read slightly
+    // NOTE: pad the allocation - GDI/display drivers can read slightly
     // past the nominal end of a 24bpp DIB buffer during internal color
     // conversion. An exact-fit buffer can trigger StretchDIBits failures
     // (or crashes) on some driver/OS combinations.

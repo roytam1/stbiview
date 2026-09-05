@@ -559,7 +559,7 @@ unsigned char* LoadY4M(const char* szPath, int* w, int* h) {
     char header[256];
     char* p;
     int pos, ch;
-    int width, height, chromaType;
+    int width, height, chromaType, isGBR;
     int ySize, uvWidth, uvHeight, uvSize;
     unsigned char* pY;
     unsigned char* pU;
@@ -587,7 +587,10 @@ unsigned char* LoadY4M(const char* szPath, int* w, int* h) {
 
     width = 0;
     height = 0;
-    chromaType = 420; /* Default chroma subsampling (420, 422, 444) */
+    chromaType = 420;
+
+    /* Explicit header tag check */
+    isGBR = (strstr(header, "GBR") != NULL || strstr(header, "gbr") != NULL) ? 1 : 0;
 
     p = header + 9;
     while (*p) {
@@ -619,7 +622,7 @@ unsigned char* LoadY4M(const char* szPath, int* w, int* h) {
         return NULL;
     }
 
-    /* 3. Allocate Y, U, V Plane Buffers */
+    /* 3. Allocate Y, U, V / G, B, R Plane Buffers */
     ySize = width * height;
     uvWidth = (chromaType == 444) ? width : ((width + 1) >> 1);
     uvHeight = (chromaType == 420) ? ((height + 1) >> 1) : height;
@@ -637,7 +640,6 @@ unsigned char* LoadY4M(const char* szPath, int* w, int* h) {
         return NULL;
     }
 
-    /* Read Y, U, V raw planes sequentially */
     if (fread(pY, 1, ySize, f) != (size_t)ySize ||
         fread(pU, 1, uvSize, f) != (size_t)uvSize ||
         fread(pV, 1, uvSize, f) != (size_t)uvSize) {
@@ -648,37 +650,77 @@ unsigned char* LoadY4M(const char* szPath, int* w, int* h) {
 
     fclose(f);
 
-    /* 4. Allocate Destination 24-bit RGB Buffer */
+    /* 4. Auto-detect GBR planar for C444 files lacking explicit header flags */
+    if (chromaType == 444 && !isGBR) {
+        int sampleCount = 0;
+        int gbrScore = 0;
+        long step = (ySize > 1000) ? (ySize / 64) : 1;
+        long sIdx;
+
+        for (sIdx = 0; sIdx < ySize && sampleCount < 64; sIdx += step) {
+            int p0 = pY[sIdx];
+            int p1 = pU[sIdx];
+            int p2 = pV[sIdx];
+
+            /* Sample extreme dark or bright regions */
+            if (p0 < 40 || p0 > 215) {
+                sampleCount++;
+                /* In GBR, Planes 1 & 2 match Plane 0. In YUV, Planes 1 & 2 hover around 128. */
+                if ((p0 < 40 && p1 < 60 && p2 < 60) ||
+                    (p0 > 215 && p1 > 195 && p2 > 195)) {
+                    gbrScore++;
+                }
+            }
+        }
+        if (sampleCount > 5 && gbrScore > (sampleCount / 2)) {
+            isGBR = 1;
+        }
+    }
+
+    /* 5. Allocate Destination 24-bit RGB Buffer */
     pRGB = (unsigned char*)malloc((size_t)width * (size_t)height * 3);
     if (!pRGB) {
         free(pY); free(pU); free(pV);
         return NULL;
     }
 
-    /* 5. Integer-Only BT.601 YUV -> RGB Conversion (Fixed-point scaling) */
-    for (y = 0; y < height; y++) {
-        uvY = (chromaType == 420) ? (y >> 1) : y;
+    /* 6. Convert Planes to Interleaved RGB Output */
+    if (isGBR) {
+        /* GBR Planar Direct Copy: Plane 0 = Green, Plane 1 = Blue, Plane 2 = Red */
+        for (y = 0; y < height; y++) {
+            for (x = 0; x < width; x++) {
+                idx = (long)y * width + x;
+                g = pY[idx];
+                b = pU[idx];
+                r = pV[idx];
 
-        for (x = 0; x < width; x++) {
-            uvX = (chromaType == 444) ? x : (x >> 1);
+                idx *= 3;
+                pRGB[idx + 0] = (unsigned char)r;
+                pRGB[idx + 1] = (unsigned char)g;
+                pRGB[idx + 2] = (unsigned char)b;
+            }
+        }
+    } else {
+        /* BT.601 YUV -> RGB Conversion */
+        for (y = 0; y < height; y++) {
+            uvY = (chromaType == 420) ? (y >> 1) : y;
 
-            Y = pY[y * width + x];
-            U = pU[uvY * uvWidth + uvX] - 128;
-            V = pV[uvY * uvWidth + uvX] - 128;
+            for (x = 0; x < width; x++) {
+                uvX = (chromaType == 444) ? x : (x >> 1);
 
-            /* Integer approximations:
-             * R = Y + 1.402 * V         => Y + ((359 * V) >> 8)
-             * G = Y - 0.3441 * U - 0.7141 * V => Y - ((88 * U + 183 * V) >> 8)
-             * B = Y + 1.772 * U         => Y + ((454 * U) >> 8)
-             */
-            r = Y + ((359 * V) >> 8);
-            g = Y - ((88 * U + 183 * V) >> 8);
-            b = Y + ((454 * U) >> 8);
+                Y = pY[y * width + x];
+                U = pU[uvY * uvWidth + uvX] - 128;
+                V = pV[uvY * uvWidth + uvX] - 128;
 
-            idx = ((long)y * width + x) * 3;
-            pRGB[idx + 0] = (unsigned char)CLAMP(r);
-            pRGB[idx + 1] = (unsigned char)CLAMP(g);
-            pRGB[idx + 2] = (unsigned char)CLAMP(b);
+                r = Y + ((359 * V) >> 8);
+                g = Y - ((88 * U + 183 * V) >> 8);
+                b = Y + ((454 * U) >> 8);
+
+                idx = ((long)y * width + x) * 3;
+                pRGB[idx + 0] = (unsigned char)CLAMP(r);
+                pRGB[idx + 1] = (unsigned char)CLAMP(g);
+                pRGB[idx + 2] = (unsigned char)CLAMP(b);
+            }
         }
     }
 

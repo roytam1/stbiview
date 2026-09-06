@@ -1364,7 +1364,7 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam) 
             ptLastMouse.x = (short)LOWORD(lParam);
             ptLastMouse.y = (short)HIWORD(lParam);
             SetCapture(hwnd); // Keep tracking mouse even if it leaves the window
-            SetCursor(LoadCursor(NULL, IDC_SIZE)); // Change cursor to a move icon
+            SetCursor(LoadCursor(NULL, mvi_getOSBuild() < MKVER(4,0) ? IDC_SIZE : IDC_SIZEALL)); // Change cursor to a move icon
             return 0;
 
         case WM_LBUTTONUP:

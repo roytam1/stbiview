@@ -142,7 +142,7 @@ void init_mvi()
 		}
 	}
 	// check system32 if verion is > 3.10
-	if(g_mvi.wPlatform == VER_PLATFORM_WIN32_NT && g_mvi.MVI_BUILD > MKVER(3, 10)) {
+	if(g_mvi.wPlatform == VER_PLATFORM_WIN32_NT && g_mvi.MVI_VER > MKVER(3, 10)) {
 		char cSysDir[256];
 		int iSysDirLen = 0;
 		iSysDirLen = GetSystemDirectoryA(cSysDir, 256);
@@ -157,6 +157,12 @@ BOOL mvi_isNT()
 {
 	if(!g_mvi_init) init_mvi();
 	return g_mvi.wPlatform==VER_PLATFORM_WIN32_NT;
+}
+
+WORD mvi_getOSVer()
+{
+	if(!g_mvi_init) init_mvi();
+	return g_mvi.MVI_VER;
 }
 
 WORD mvi_getOSBuild()
@@ -1364,7 +1370,7 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam) 
             ptLastMouse.x = (short)LOWORD(lParam);
             ptLastMouse.y = (short)HIWORD(lParam);
             SetCapture(hwnd); // Keep tracking mouse even if it leaves the window
-            SetCursor(LoadCursor(NULL, mvi_getOSBuild() < MKVER(4,0) ? IDC_SIZE : IDC_SIZEALL)); // Change cursor to a move icon
+            SetCursor(LoadCursor(NULL, mvi_getOSVer() < MKVER(4,0) ? IDC_SIZE : IDC_SIZEALL)); // Change cursor to a move icon
             return 0;
 
         case WM_LBUTTONUP:

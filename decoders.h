@@ -24,8 +24,10 @@
 /* MiniTIFF for TIFF image format */
 #define MINITIFF_IMPLEMENTATION
 #undef STB_IMAGE_IMPLEMENTATION // already included, so no need to include stbi function body
+#define STB_JBIG_IMPLEMENTATION
 #define MINITIFF_USE_STB_IMAGE
 #define MINITIFF_USE_STB_ZLIB
+#define MINITIFF_USE_STB_JBIG
 #include "minitiff.h"
 
 #ifndef PICVIEW_NO_AVIF

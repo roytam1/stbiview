@@ -27,6 +27,7 @@
       - Compression = 1   (none)
       - Compression = 3 and 4 (CCITT)
       - Compression = 5   (LZW)
+      - Compression = 34661 (JBIG, optional)
       - Compression = 32773 (PackBits)
       - Predictor = 1 and 2 for byte-oriented data
 
@@ -48,6 +49,16 @@
         Use stb_image's internal zlib decoder for Deflate
         (Compression = 8 and 32946). This is deliberately optional because
         stb_image's internal zlib routines are not a stable public API.
+
+      MINITIFF_USE_STB_JBIG
+
+        Include stb_jbig.h and use stbi_jbig_load_from_memory() for JBIG
+        strips (Compression = 10).
+
+        The user must provide stb_jbig.h in the include path.
+
+        This source does NOT define STB_JBIG_IMPLEMENTATION. The application
+        should do that once, in one C file, before including stb_jbig.h.
 
     Example:
 
@@ -74,11 +85,23 @@
         #define STB_IMAGE_IMPLEMENTATION
         #include "stb_image.h"
 
-    Optional stb_image build:
+    Optional stb_jbig build:
+
+        cc -DMINITIFF_USE_STB_JBIG -c minitiff.h
+
+    The application must arrange for stb_jbig's implementation to be built
+    exactly once, for example:
+
+        #define STB_JBIG_IMPLEMENTATION
+        #include "stb_jbig.h"
+
+    Combined build:
 
         #define STB_IMAGE_IMPLEMENTATION
+        #define STB_JBIG_IMPLEMENTATION
         #define MINITIFF_USE_STB_IMAGE
         #define MINITIFF_USE_STB_ZLIB
+        #define MINITIFF_USE_STB_JBIG
         #include "minitiff.h"
 */
 #ifndef _MINITFF_H
@@ -100,6 +123,9 @@
 
     MINITIFF_USE_STB_ZLIB requires MINITIFF_USE_STB_IMAGE.
 
+    MINITIFF_USE_STB_JBIG:
+        JBIG decoding through stb_jbig.h.
+
     IMPORTANT:
         Because stb_image's zlib functions are static/private, when
         MINITIFF_USE_STB_ZLIB is enabled this file must be compiled in
@@ -116,6 +142,10 @@
 */
 #ifdef MINITIFF_USE_STB_IMAGE
 #include "stb_image.h"
+#endif
+
+#ifdef MINITIFF_USE_STB_JBIG
+#include "stb_jbig.h"
 #endif
 
 #ifdef MINITIFF_USE_STB_ZLIB
@@ -969,6 +999,7 @@ static int tiff_parse_ifd(const TIFF_Context *tiff,
         page->compression != 6 &&
         page->compression != 7 &&
         page->compression != 8 &&
+        page->compression != 34661 &&
         page->compression != 32773 &&
         page->compression != 32946)
         return 0;
@@ -1046,6 +1077,12 @@ static int tiff_parse_ifd(const TIFF_Context *tiff,
     if (page->compression == 8 ||
         page->compression == 32946) {
 #ifndef MINITIFF_USE_STB_ZLIB
+        return 0;
+#endif
+    }
+
+    if (page->compression == 34661) {
+#ifndef MINITIFF_USE_STB_JBIG
         return 0;
 #endif
     }
@@ -2377,6 +2414,78 @@ static int tiff_jpeg_decode(const unsigned char *src,
 
 
 /* ------------------------------------------------------------------------- */
+/* JBIG-in-TIFF decoder                                                      */
+/* ------------------------------------------------------------------------- */
+
+#ifdef MINITIFF_USE_STB_JBIG
+
+/*
+    JBIG-in-TIFF strips do not include the 20-byte BIH (Basic Information
+    Header) that the JBIG decoder expects.  We reconstruct the BIH from the
+    TIFF tags: ImageWidth, ImageLength and SamplesPerPixel.
+
+    BIH layout (20 bytes, big-endian):
+        0   DL        (differential layer, 0 for base)
+        1   D         (highest layer, 0 for base)
+        2   planes    (number of bit planes)
+        3   reserved  (0)
+        4-7 XLW       (width of image)
+        8-11  YLW     (height of image)
+        12-15 L0      (recommended stripe length, 128 = standard default)
+        16  MX        (max horizontal offset, 0 = default)
+        17  MY        (max vertical offset, 0 = default)
+        18  order     (0 = default: stripe-first, MSB-first)
+        19  options   (0 = default)
+*/
+static int tiff_jbig_decode(const unsigned char *src,
+                            size_t src_size,
+                            unsigned char *dst,
+                            size_t dst_size,
+                            unsigned long expected_width,
+                            unsigned long expected_height,
+                            unsigned short samples_per_pixel)
+{
+    int width;
+    int height;
+    int planes;
+    unsigned char *decoded;
+    size_t packed_size;
+
+    decoded = stbi_jbig_load_from_memory(
+        src,
+        (int)src_size,
+        &width,
+        &height,
+        &planes);
+
+    if (!decoded)
+        return 0;
+
+    if ((unsigned long)width != expected_width ||
+        (unsigned long)height != expected_height) {
+        stbi_jbig_free(decoded);
+        return 0;
+    }
+
+    /* stb_jbig returns packed 1bpp, MSB-first, byte-aligned per row.
+       Output size = ((width + 7) / 8) * height, matching TIFF's
+       destination buffer layout. */
+    packed_size = ((expected_width + 7UL) / 8UL) * expected_height;
+    if (packed_size != dst_size) {
+        stbi_jbig_free(decoded);
+        return 0;
+    }
+
+    memcpy(dst, decoded, packed_size);
+
+    stbi_jbig_free(decoded);
+    return 1;
+}
+
+#endif /* MINITIFF_USE_STB_JBIG */
+
+
+/* ------------------------------------------------------------------------- */
 /* Strip decoding                                                            */
 /* ------------------------------------------------------------------------- */
 
@@ -2448,7 +2557,6 @@ static unsigned long tiff_get_sample(const unsigned char *row,
         pixel 0 reads the low nibble instead of the high nibble.
     */
     if (fill_order == 2 && bytes_needed == 1 && (8U % bits) == 0U) {
-        unsigned int samples_per_byte = 8U / bits;
         unsigned int sample_index = bit_offset / bits;
         shift = bits * sample_index;
     }
@@ -2809,6 +2917,14 @@ static int tiff_decode_block(const TIFF_Context *tiff,
     case 7:
         return 0;
 #endif
+#ifdef MINITIFF_USE_STB_JBIG
+    case 34661:
+        return tiff_jbig_decode(tiff->data + offset, (size_t)byte_count, destination, destination_size,
+                                block_width, block_height, page->samples_per_pixel);
+#else
+    case 34661:
+        return 0;
+#endif
     default:
         return 0;
     }
@@ -2857,12 +2973,26 @@ static int tiff_copy_block_to_image(const TIFF_Page *page,
                 bytes = (size_t)copy_width * page->samples_per_pixel * (bits / 8);
                 memcpy(dst_row + (size_t)dst_x * page->samples_per_pixel * (bits / 8), src_row, bytes);
             } else {
-                /* Packed samples: only whole-byte-aligned blocks can be copied directly. */
-                if ((dst_x * page->samples_per_pixel * bits) % 8 != 0 ||
-                    (copy_width * page->samples_per_pixel * bits) % 8 != 0)
-                    return 0;
-                memcpy(dst_row + (dst_x * page->samples_per_pixel * bits) / 8,
-                       src_row, (copy_width * page->samples_per_pixel * bits) / 8);
+                /* Packed samples: copy bit-by-bit for non-byte-aligned blocks. */
+                if ((dst_x * page->samples_per_pixel * bits) % 8 == 0 &&
+                    (copy_width * page->samples_per_pixel * bits) % 8 == 0) {
+                    memcpy(dst_row + (dst_x * page->samples_per_pixel * bits) / 8,
+                           src_row, (copy_width * page->samples_per_pixel * bits) / 8);
+                } else {
+                    unsigned long bx;
+                    for (bx = 0; bx < copy_width; ++bx) {
+                        unsigned long src_bit = bx * page->samples_per_pixel * bits;
+                        unsigned long dst_bit = ((dst_x + bx) * page->samples_per_pixel + plane) * bits;
+                        unsigned short bi;
+                        for (bi = 0; bi < bits; ++bi) {
+                            unsigned long sb = src_bit + bi;
+                            unsigned long db = dst_bit + bi;
+                            int sv = (src_row[sb / 8] >> (7 - (sb % 8))) & 1;
+                            if (sv)
+                                dst_row[db / 8] |= (unsigned char)(128u >> (db % 8));
+                        }
+                    }
+                }
             }
         } else {
             for (x = 0; x < copy_width; ++x) {
@@ -3405,17 +3535,20 @@ int main(int argc, char **argv)
 {
     MiniTIFF_Image *image;
     unsigned page;
+    unsigned long x, y;
+    const unsigned char *p;
+    FILE *out;
 
-    if (argc < 2) {
+    if (argc < 3) {
         fprintf(stderr,
-                "usage: %s file.tif [page]\n",
+                "usage: %s file.tif output.ppm [page]\n",
                 argv[0]);
         return 2;
     }
 
     page = 0;
-    if (argc >= 3)
-        page = (unsigned)strtoul(argv[2], NULL, 10);
+    if (argc >= 4)
+        page = (unsigned)strtoul(argv[3], NULL, 10);
 
     image = tiff_load_file(argv[1], page);
 
@@ -3424,9 +3557,28 @@ int main(int argc, char **argv)
         return 1;
     }
 
-    printf("%lu x %lu RGBA8\n",
-           image->width,
-           image->height);
+    out = fopen(argv[2], "wb");
+    if (!out) {
+        fprintf(stderr, "cannot open %s for writing\n", argv[2]);
+        tiff_free(image);
+        return 1;
+    }
+
+    fprintf(out, "P6\n%lu %lu\n255\n", image->width, image->height);
+
+    p = image->pixels;
+    for (y = 0; y < image->height; ++y) {
+        for (x = 0; x < image->width; ++x) {
+            fputc(p[0], out);
+            fputc(p[1], out);
+            fputc(p[2], out);
+            p += 4;
+        }
+    }
+
+    fclose(out);
+    printf("%lu x %lu PPM written to %s\n",
+           image->width, image->height, argv[2]);
 
     tiff_free(image);
     return 0;

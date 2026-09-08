@@ -664,7 +664,7 @@ void LoadImageFromPath(HWND hwnd, char* filePath) {
     simplewebp *swebp;
     j40_image jxlimage;
     MiniTIFF_Image *tiffimg;
-    int isWebp = 0, isJXL = 0, isPCX = 0, isTIFF = 0, isAVIF = 0, swRet;
+    int isWebp = 0, isJXL = 0, isPCX = 0, isTIFF = 0, isAVIF = 0, isJBIG = 0, swRet;
     char errBuf[MAX_PATH + 50];
 
     UpdateWindowTitle(hwnd, "Loading...");
@@ -767,6 +767,13 @@ void LoadImageFromPath(HWND hwnd, char* filePath) {
         }
     }
     else
+    if(fileExt &&
+        (stricmp(fileExt,".jbig") == 0 ||
+         stricmp(fileExt,".jbg") == 0)) {
+        isJBIG = 1;
+        pSrc = stbi_jbig_load_rgb_from_file(filePath, &imgW, &imgH);
+    }
+    else
     if(fileExt && stricmp(fileExt,".mag") == 0) {
         isWebp = 1; // not really webp, but same malloc style as webp
         pSrc = LoadMAG(filePath, &imgW, &imgH);
@@ -828,6 +835,7 @@ TrySTB:
         if(isWebp) free(pSrc);
         else if(isPCX) drpcx_free(pSrc);
         else if(isTIFF) tiff_free(tiffimg);
+        else if(isJBIG) stbi_jbig_free(pSrc);
         else if(isJXL) j40_free(&jxlimage);
         else if(isAVIF) stb_avif_free(pSrc);
         else stbi_image_free(pSrc); // Free the original stb_image buffer
@@ -905,6 +913,7 @@ TrySTB:
     if(isWebp) free(pSrc);
     else if(isPCX) drpcx_free(pSrc);
     else if(isTIFF) tiff_free(tiffimg);
+    else if(isJBIG) stbi_jbig_free(pSrc);
     else if(isJXL) j40_free(&jxlimage);
     else if(isAVIF) stb_avif_free(pSrc);
     else stbi_image_free(pSrc); // Free the original stb_image buffer

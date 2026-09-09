@@ -963,7 +963,7 @@ static int      stbi__gif_info(stbi__context *s, int *x, int *y, int *comp);
 #ifndef STBI_NO_PNM
 static int      stbi__pnm_test(stbi__context *s);
 static void    *stbi__pnm_load(stbi__context *s, int *x, int *y, int *comp, int req_comp, stbi__result_info *ri);
-static int      stbi__pnm_info(stbi__context *s, int *x, int *y, int *comp);
+static int      stbi__pnm_info(stbi__context *s, int *x, int *y, int *comp, char *type);
 static int      stbi__pnm_is16(stbi__context *s);
 #endif
 
@@ -7500,7 +7500,7 @@ static int      stbi__pnm_test(stbi__context *s)
    char p, t;
    p = (char) stbi__get8(s);
    t = (char) stbi__get8(s);
-   if (p != 'P' || (t != '5' && t != '6')) {
+   if (p != 'P' || (t != '4' && t != '5' && t != '6')) {
        stbi__rewind( s );
        return 0;
    }
@@ -7510,9 +7510,10 @@ static int      stbi__pnm_test(stbi__context *s)
 static void *stbi__pnm_load(stbi__context *s, int *x, int *y, int *comp, int req_comp, stbi__result_info *ri)
 {
    stbi_uc *out;
+   char type = 0;
    STBI_NOTUSED(ri);
 
-   ri->bits_per_channel = stbi__pnm_info(s, (int *)&s->img_x, (int *)&s->img_y, (int *)&s->img_n);
+   ri->bits_per_channel = stbi__pnm_info(s, (int *)&s->img_x, (int *)&s->img_y, (int *)&s->img_n, &type);
    if (ri->bits_per_channel == 0)
       return 0;
 
@@ -7523,14 +7524,36 @@ static void *stbi__pnm_load(stbi__context *s, int *x, int *y, int *comp, int req
    *y = s->img_y;
    if (comp) *comp = s->img_n;
 
-   if (!stbi__mad4sizes_valid(s->img_n, s->img_x, s->img_y, ri->bits_per_channel / 8, 0))
-      return stbi__errpuc("too large", "PNM too large");
+   if (type == '4') {
+      // P4 (PBM binary): 1 bit per pixel, MSB first, rows padded to byte boundaries
+      int i, j;
+      stbi_uc b;
 
-   out = (stbi_uc *) stbi__malloc_mad4(s->img_n, s->img_x, s->img_y, ri->bits_per_channel / 8, 0);
-   if (!out) return stbi__errpuc("outofmem", "Out of memory");
-   if (!stbi__getn(s, out, s->img_n * s->img_x * s->img_y * (ri->bits_per_channel / 8))) {
-      STBI_FREE(out);
-      return stbi__errpuc("bad PNM", "PNM file truncated");
+      out = (stbi_uc *) stbi__malloc_mad4(s->img_n, s->img_x, s->img_y, 1, 0);
+      if (!out) return stbi__errpuc("outofmem", "Out of memory");
+
+      for (i = 0; i < (int) s->img_y; ++i) {
+         for (j = 0; j < (int) s->img_x; ++j) {
+            if ((j & 7) == 0) {
+               b = stbi__get8(s);
+               if (stbi__at_eof(s)) {
+                  STBI_FREE(out);
+                  return stbi__errpuc("bad PNM", "PNM file truncated");
+               }
+            }
+            out[i * s->img_x + j] = ((b >> (7 - (j & 7))) & 1) ? 0 : 255;
+         }
+      }
+   } else {
+      if (!stbi__mad4sizes_valid(s->img_n, s->img_x, s->img_y, ri->bits_per_channel / 8, 0))
+         return stbi__errpuc("too large", "PNM too large");
+
+      out = (stbi_uc *) stbi__malloc_mad4(s->img_n, s->img_x, s->img_y, ri->bits_per_channel / 8, 0);
+      if (!out) return stbi__errpuc("outofmem", "Out of memory");
+      if (!stbi__getn(s, out, s->img_n * s->img_x * s->img_y * (ri->bits_per_channel / 8))) {
+         STBI_FREE(out);
+         return stbi__errpuc("bad PNM", "PNM file truncated");
+      }
    }
 
    if (req_comp && req_comp != s->img_n) {
@@ -7582,7 +7605,7 @@ static int      stbi__pnm_getinteger(stbi__context *s, char *c)
    return value;
 }
 
-static int      stbi__pnm_info(stbi__context *s, int *x, int *y, int *comp)
+static int      stbi__pnm_info(stbi__context *s, int *x, int *y, int *comp, char *type)
 {
    int maxv, dummy;
    char c, p, t;
@@ -7596,9 +7619,30 @@ static int      stbi__pnm_info(stbi__context *s, int *x, int *y, int *comp)
    // Get identifier
    p = (char) stbi__get8(s);
    t = (char) stbi__get8(s);
-   if (p != 'P' || (t != '5' && t != '6')) {
+   if (p != 'P' || (t != '4' && t != '5' && t != '6')) {
        stbi__rewind(s);
        return 0;
+   }
+
+   if (type) *type = t;
+
+   if (t == '4') {
+      // P4 (PBM binary): no max value, always 1 component
+      *comp = 1;
+
+      c = (char) stbi__get8(s);
+      stbi__pnm_skip_whitespace(s, &c);
+
+      *x = stbi__pnm_getinteger(s, &c);
+      if (*x == 0)
+          return stbi__err("invalid width", "PNM image header had zero or overflowing width");
+      stbi__pnm_skip_whitespace(s, &c);
+
+      *y = stbi__pnm_getinteger(s, &c);
+      if (*y == 0)
+          return stbi__err("invalid height", "PNM image header had zero or overflowing height");
+
+      return 8;
    }
 
    *comp = (t == '6') ? 3 : 1;  // '5' is 1-component .pgm; '6' is 3-component .ppm
@@ -7627,7 +7671,7 @@ static int      stbi__pnm_info(stbi__context *s, int *x, int *y, int *comp)
 
 static int stbi__pnm_is16(stbi__context *s)
 {
-   if (stbi__pnm_info(s, NULL, NULL, NULL) == 16)
+   if (stbi__pnm_info(s, NULL, NULL, NULL, NULL) == 16)
 	   return 1;
    return 0;
 }
@@ -7660,7 +7704,7 @@ static int stbi__info_main(stbi__context *s, int *x, int *y, int *comp)
    #endif
 
    #ifndef STBI_NO_PNM
-   if (stbi__pnm_info(s, x, y, comp))  return 1;
+   if (stbi__pnm_info(s, x, y, comp, NULL))  return 1;
    #endif
 
    #ifndef STBI_NO_HDR

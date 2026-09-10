@@ -664,7 +664,7 @@ void LoadImageFromPath(HWND hwnd, char* filePath) {
     simplewebp *swebp;
     j40_image jxlimage;
     MiniTIFF_Image *tiffimg;
-    int isWebp = 0, isJXL = 0, isPCX = 0, isTIFF = 0, isAVIF = 0, isJBIG = 0, swRet;
+    int isWebp = 0, isJXL = 0, isPCX = 0, isTIFF = 0, isAVIF = 0, isJBIG2 = 0, isJBIG = 0, swRet;
     char errBuf[MAX_PATH + 50];
 
     UpdateWindowTitle(hwnd, "Loading...");
@@ -767,6 +767,13 @@ void LoadImageFromPath(HWND hwnd, char* filePath) {
         }
     }
     else
+    if(fileExt && /* JBIG2 must be tested earlier than JBIG(1) */
+        (stricmp(fileExt,".jbig2") == 0 ||
+         stricmp(fileExt,".jb2") == 0)) {
+        isJBIG2 = 1;
+        pSrc = stb_jbig2_decode_file(filePath, &imgW, &imgH);
+    }
+    else
     if(fileExt &&
         (stricmp(fileExt,".jbig") == 0 ||
          stricmp(fileExt,".jbg") == 0)) {
@@ -835,6 +842,7 @@ TrySTB:
         if(isWebp) free(pSrc);
         else if(isPCX) drpcx_free(pSrc);
         else if(isTIFF) tiff_free(tiffimg);
+        else if(isJBIG2) stb_jbig2_free(pSrc);
         else if(isJBIG) stbi_jbig_free(pSrc);
         else if(isJXL) j40_free(&jxlimage);
         else if(isAVIF) stb_avif_free(pSrc);
@@ -913,6 +921,7 @@ TrySTB:
     if(isWebp) free(pSrc);
     else if(isPCX) drpcx_free(pSrc);
     else if(isTIFF) tiff_free(tiffimg);
+    else if(isJBIG2) stb_jbig2_free(pSrc);
     else if(isJBIG) stbi_jbig_free(pSrc);
     else if(isJXL) j40_free(&jxlimage);
     else if(isAVIF) stb_avif_free(pSrc);
@@ -960,7 +969,7 @@ void OpenPicFile(HWND hwnd) {
     ofn.hwndOwner = hwnd;
     ofn.lpstrFile = szFile;
     ofn.nMaxFile = sizeof(szFile);
-    ofn.lpstrFilter = "Images\0*.jpg;*.png;*.gif;*.bmp;*.tga;*.pnm;*.ppm;*.pgm;*.webp;*.web;*.wbp;*.pcx;*.xbm;*.xpm;*.msp;*.qoi;*.jxl;*.tif;*.tiff;*.mag;*.p2;*.avif;*.ivf\0All Files\0*.*\0";
+    ofn.lpstrFilter = "Images\0*.jpg;*.png;*.gif;*.bmp;*.tga;*.pnm;*.ppm;*.pgm;*.pbm;*.webp;*.web;*.wbp;*.pcx;*.xbm;*.xpm;*.msp;*.qoi;*.jxl;*.tif;*.tiff;*.mag;*.p2;*.avif;*.ivf;*.jb2;*.jbig2;*.jbg;*.jbig\0All Files\0*.*\0";
     ofn.Flags = OFN_PATHMUSTEXIST | OFN_FILEMUSTEXIST;
 
     if (GetOpenFileName(&ofn)) {

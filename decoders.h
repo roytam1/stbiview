@@ -21,7 +21,7 @@
 #include "j40.h"
 #include "j40.h"
 
-/* MiniTIFF for TIFF image format */
+/* MiniTIFF for TIFF image format, with JBIG(1) support */
 #define MINITIFF_IMPLEMENTATION
 #undef STB_IMAGE_IMPLEMENTATION // already included, so no need to include stbi function body
 #define STB_JBIG_IMPLEMENTATION
@@ -29,6 +29,10 @@
 #define MINITIFF_USE_STB_ZLIB
 #define MINITIFF_USE_STB_JBIG
 #include "minitiff.h"
+
+/* stb_pic2 for PIC2 (.p2) image format */
+#define STB_JBIG2_IMPLEMENTATION
+#include "stb_jbig2.h"
 
 #ifndef PICVIEW_NO_AVIF
 /* stb_avif for AVIF image format */

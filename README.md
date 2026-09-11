@@ -8,8 +8,8 @@ A high-performance, lightweight image viewer specifically engineered for **Windo
 * **Color Cube LUT:** Uses a pre-computed 32x32x32 Look-Up Table to map colors instantly to VGA (16) or Win8-based (256) palettes, avoiding expensive distance calculations.
 * **Custom Generic 256 Color Palette:** Based on ["win8" palette](https://web.archive.org/web/20250227072942/https://eisbox.net/downloads/palettes/win-8.txt) with some modifications on both palette and `FindClosestColor` function.
 * **Universal Format Support:**
-    * **Modern:** QOI (Quite OK Image), WebP, AVIF (not all features are supported), JPEG XL, JPG, PNG, GIF (without animation), BMP.
-    * **Retro/Unix:** PCX, TGA, TIFF (Classic TIFF, BigTIFF and some encodings are not supported), MAG, PIC2 (.p2), PNM, PGM, PPM, XBM (X-BitMap) and XPM (X-PixMap).
+    * **Modern:** QOI (Quite OK Image), WebP, AVIF (not all features are supported), JPEG XL, JPG, PNG, GIF (without animation), JBIG2 (first page only), BMP.
+    * **Retro/Unix:** PCX, TGA, TIFF (Classic TIFF, BigTIFF and some encodings are not supported), MAG, PIC2 (.p2), PBM, PNM, PGM, PPM, JBIG, XBM (X-BitMap) and XPM (X-PixMap).
 * **Smooth Drag-to-Scroll:** An "Acrobat-style" Hand Tool for panning large images, utilizing `SetCapture` and `ScrollWindowEx` for tear-free movement.
 * **Architecture-Aware Rendering:**
     * **Win32s:** Direct-to-screen `StretchDIBits` to stay within 16-bit GDI resource heaps.
@@ -31,8 +31,10 @@ On a 486SX, every clock cycle counts. The image processing pipeline follows thes
 | **BMP** | ✅ Fast | Zero processing required. | stb_image |
 | **PCX** | ✅ Fast | Run Length Encoding can be processed instantly. | dr_pcx |
 | **MAG** | ✅ Fast | Flags based Run Length Encoding circular buffer. | stb_mag (as internal function) |
-| **TIFF** | ✅ Moderate | Depends on actual encoding. Fast with Raw, Moderate with LZW and Deflate, Slow with JPEG. | minitiff, stb_image |
+| **TIFF** | ✅ Moderate | Depends on actual encoding. Fast with Raw, Moderate with LZW, Deflate, PackBits, JBIG, and Slow with JPEG. | minitiff, stb_image, stb_jbig |
 | **PIC2** | ✅ Moderate | Depends on actual encoding. Fast with Raw, Moderate with compressed methods. | stb_pic2 |
+| **JBIG** | ✅ Moderate | QM-coder should be quite capable to decode in 486. | stb_jbig |
+| **JBIG2** | ✅ Moderate | JBIG2 could be a bit slower than JBIG because of Glyph Restorations. | stb_jbig2 |
 | **PNG** | 🐢 Slow | Complex zlib decompression and PNG filters. | stb_image |
 | **JPG** , **WebP** | 🐢 Slow | Heavy IDCT math (emulated on SX). | stb_image, simplewebp |
 | **JPEG XL** | 🐢 Slow | Lots of floating point operations. Lossless JPEG XL can be decoded faster than lossy JPEG XL. | j40 |
@@ -63,6 +65,8 @@ On a 486SX, every clock cycle counts. The image processing pipeline follows thes
     * `minitiff.h`
     * `stb_pic2.h`
     * `stb_avif.h`
+    * `stb_jbig.h`
+    * `stb_jbig2.h`
     * `GDI32.lib`, `USER32.lib`, `COMDLG32.lib`
 
 ## 📝 Limitations & Notes

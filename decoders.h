@@ -565,7 +565,7 @@ unsigned char* LoadY4M(const char* szPath, int* w, int* h) {
     char header[256];
     char* p;
     int pos, ch;
-    int width, height, chromaType, isGBR;
+    int width, height, chromaType, isGBR, isMono;
     int ySize, uvWidth, uvHeight, uvSize;
     unsigned char* pY;
     unsigned char* pU;
@@ -597,6 +597,7 @@ unsigned char* LoadY4M(const char* szPath, int* w, int* h) {
 
     /* Explicit header tag check */
     isGBR = (strstr(header, "GBR") != NULL || strstr(header, "gbr") != NULL) ? 1 : 0;
+    isMono = 0;
 
     p = header + 9;
     while (*p) {
@@ -604,7 +605,9 @@ unsigned char* LoadY4M(const char* szPath, int* w, int* h) {
         if (*p == 'W') width = atoi(p + 1);
         else if (*p == 'H') height = atoi(p + 1);
         else if (*p == 'C') {
-            if (strncmp(p + 1, "444", 3) == 0) chromaType = 444;
+            if (strncmp(p + 1, "mono", 4) == 0) { isMono = 1; chromaType = 0; }
+            else if (strncmp(p + 1, "400", 3) == 0) { isMono = 1; chromaType = 0; }
+            else if (strncmp(p + 1, "444", 3) == 0) chromaType = 444;
             else if (strncmp(p + 1, "422", 3) == 0) chromaType = 422;
             else if (strncmp(p + 1, "420", 3) == 0) chromaType = 420;
         }
@@ -630,15 +633,21 @@ unsigned char* LoadY4M(const char* szPath, int* w, int* h) {
 
     /* 3. Allocate Y, U, V / G, B, R Plane Buffers */
     ySize = width * height;
-    uvWidth = (chromaType == 444) ? width : ((width + 1) >> 1);
-    uvHeight = (chromaType == 420) ? ((height + 1) >> 1) : height;
-    uvSize = uvWidth * uvHeight;
+    if (isMono) {
+        uvWidth = 0;
+        uvHeight = 0;
+        uvSize = 0;
+    } else {
+        uvWidth = (chromaType == 444) ? width : ((width + 1) >> 1);
+        uvHeight = (chromaType == 420) ? ((height + 1) >> 1) : height;
+        uvSize = uvWidth * uvHeight;
+    }
 
     pY = (unsigned char*)malloc((size_t)ySize);
-    pU = (unsigned char*)malloc((size_t)uvSize);
-    pV = (unsigned char*)malloc((size_t)uvSize);
+    pU = isMono ? NULL : (unsigned char*)malloc((size_t)uvSize);
+    pV = isMono ? NULL : (unsigned char*)malloc((size_t)uvSize);
 
-    if (!pY || !pU || !pV) {
+    if (!pY || (!isMono && (!pU || !pV))) {
         if (pY) free(pY);
         if (pU) free(pU);
         if (pV) free(pV);
@@ -647,8 +656,8 @@ unsigned char* LoadY4M(const char* szPath, int* w, int* h) {
     }
 
     if (fread(pY, 1, ySize, f) != (size_t)ySize ||
-        fread(pU, 1, uvSize, f) != (size_t)uvSize ||
-        fread(pV, 1, uvSize, f) != (size_t)uvSize) {
+        (!isMono && (fread(pU, 1, uvSize, f) != (size_t)uvSize ||
+                     fread(pV, 1, uvSize, f) != (size_t)uvSize))) {
         free(pY); free(pU); free(pV);
         fclose(f);
         return NULL;
@@ -657,7 +666,7 @@ unsigned char* LoadY4M(const char* szPath, int* w, int* h) {
     fclose(f);
 
     /* 4. Auto-detect GBR planar for C444 files lacking explicit header flags */
-    if (chromaType == 444 && !isGBR) {
+    if (!isMono && chromaType == 444 && !isGBR) {
         int sampleCount = 0;
         int gbrScore = 0;
         long step = (ySize > 1000) ? (ySize / 64) : 1;
@@ -691,7 +700,18 @@ unsigned char* LoadY4M(const char* szPath, int* w, int* h) {
     }
 
     /* 6. Convert Planes to Interleaved RGB Output */
-    if (isGBR) {
+    if (isMono) {
+        /* Monochrome: R = G = B = Y */
+        for (y = 0; y < height; y++) {
+            for (x = 0; x < width; x++) {
+                idx = ((long)y * width + x) * 3;
+                r = pY[y * width + x];
+                pRGB[idx + 0] = (unsigned char)r;
+                pRGB[idx + 1] = (unsigned char)r;
+                pRGB[idx + 2] = (unsigned char)r;
+            }
+        }
+    } else if (isGBR) {
         /* GBR Planar Direct Copy: Plane 0 = Green, Plane 1 = Blue, Plane 2 = Red */
         for (y = 0; y < height; y++) {
             for (x = 0; x < width; x++) {

@@ -34,7 +34,7 @@ On a 486SX, every clock cycle counts. The image processing pipeline follows thes
 | **XBM** | ⚡ Fast | Simple hex string parsing. | Internal function |
 | **BMP** | ✅ Fast | Zero processing required. | stb_image |
 | **PCX** | ✅ Fast | Run Length Encoding can be processed instantly. | dr_pcx |
-| **MAG** | ✅ Fast | Flags based Run Length Encoding circular buffer. | stb_mag (as internal function) |
+| **MAG** | ✅ Fast | Flags based Run Length Encoding circular buffer. | [stb_mag](https://github.com/roytam1/stb_mag) (as internal function) |
 | **TIFF** | ✅ Moderate | Depends on actual encoding. Fast with Raw, Moderate with LZW, Deflate, PackBits, JBIG, and Slow with JPEG. | minitiff, stb_image, stb_jbig |
 | **PIC2** | ✅ Moderate | Depends on actual encoding. Fast with Raw, Moderate with compressed methods. | stb_pic2 |
 | **JBIG** | ✅ Moderate | QM-coder should be quite capable to decode in 486. | stb_jbig |
@@ -63,7 +63,7 @@ On a 486SX, every clock cycle counts. The image processing pipeline follows thes
 ## 🏗 Building
 
 ### MSVC (authentic Win32s builds)
-1.  **Compiler:** Recommended MSVC 4.0, 2.2 (AVIF not working with MSVC 2.2 x86) for authentic Win32s compatibility.
+1.  **Compiler:** Recommended MSVC 4.0, 2.2 (AVIF has to be compiled without global optimizations in MSVC 2.2 x86 and 4.0 PowerPC) for authentic Win32s compatibility.
 2.  **Memory Model:** Must be compiled as a **Win32 Target**.
 
 ### GCC (MinGW-w64, for development/testing)
@@ -71,15 +71,15 @@ On a 486SX, every clock cycle counts. The image processing pipeline follows thes
 2.  Run `mingw32-make` (produces `picview-gcc.exe`, `make clean` removes build outputs). The `Makefile` auto-detects 32-bit vs 64-bit targets (`$(CC) -dumpmachine`) to select the correct `pthread_once` linkage.
 
 ### Dependencies (common to both toolchains)
-* `stb_image.h` (for JPG/PNG support)
-* `dr_pcx.h`
-* `simplewebp.h`
-* `j40.h`
-* `minitiff.h`
-* `stb_pic2.h`
-* `stb_avif.h`
-* `stb_jbig.h`
-* `stb_jbig2.h`
+* `stb_image.h` (for JPG/PNG support, [a vendored version is used](https://github.com/roytam1/stb_image).)
+* `dr_pcx.h` ([C89 version is used](https://github.com/roytam1/dr_pcx))
+* `simplewebp.h` ([https://github.com/MikuAuahDark/simplewebp](https://github.com/MikuAuahDark/simplewebp))
+* `j40.h` ([C89 version is used](https://github.com/roytam1/j40))
+* `minitiff.h` ([https://github.com/roytam1/minitiff](https://github.com/roytam1/minitiff))
+* `stb_pic2.h` ([https://github.com/roytam1/stb_pic2](https://github.com/roytam1/stb_pic2))
+* `stb_avif.h` ([https://github.com/roytam1/stb_avif/tree/chatgpt](https://github.com/roytam1/stb_avif/tree/chatgpt))
+* `stb_jbig.h` ([https://github.com/roytam1/stb_jbig](https://github.com/roytam1/stb_jbig))
+* `stb_jbig2.h` ([https://github.com/roytam1/stb_jbig2](https://github.com/roytam1/stb_jbig2))
 * `GDI32.lib`, `USER32.lib`, `COMDLG32.lib`
 
 ## 📝 Limitations & Notes

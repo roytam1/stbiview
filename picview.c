@@ -335,11 +335,20 @@ void UpdateWindowTitle(HWND hwnd, char* filePath);
 void UpdateScrollbars(HWND hwnd);
 void LoadImageFromPath(HWND hwnd, char* filePath);
 void OpenPicFile(HWND hwnd);
+void BuildViewFromOriginal(HWND hwnd, int dstW, int dstH);
+void FitToWindow(HWND hwnd);
+void FitComputeSize(int origW_, int origH_, int availW, int availH,
+                    int *pDstW, int *pDstH);
+int ResizeBilinear24(unsigned char* pDst, int dstW, int dstH,
+                     unsigned char* pSrc, int srcW, int srcH);
 LRESULT CALLBACK WindowProc(HWND, UINT, WPARAM, LPARAM);
 
 /* Global State */
 HPALETTE hPalette = NULL; // New: Palette handle
-unsigned char* pRawData = NULL; // Raw RGB pixel data
+unsigned char* pRawData = NULL; // Display DIB (bottom-up BGR, padded) - derived view
+unsigned char* pOrigData = NULL; // Pristine decoded RGB (top-down, packed) - never dithered
+int origW = 0, origH = 0; // Pristine dimensions
+int bFitted = 0; // View is a fitted (resized) derivative, not 100%
 char szFile[260] = {0};
 int imgWidth = 0, imgHeight = 0;
 int scrollX = 0, scrollY = 0;
@@ -656,11 +665,247 @@ BOOL SaveRawBufferToBMP(const char* szFileName) {
     return TRUE;
 }
 
-void LoadImageFromPath(HWND hwnd, char* filePath) {
-    int imgW = 0, imgH = 0, channels, bpp, stride, x, y;
-    unsigned char *pSrc, *pDest;
-    char *fileExt;
+/* Integer-only bilinear shrink resizer (no FPU).
+   Bresenham stepping for source positions + 8-bit fractional weights.
+   The X mapping is precomputed once since every row shares it.
+   Returns 1 on success, 0 on allocation failure (pDst untouched). */
+int ResizeBilinear24(unsigned char* pDst, int dstW, int dstH,
+                     unsigned char* pSrc, int srcW, int srcH) {
+    long *xmap; /* [dstW] pairs: src-x int part, 8-bit frac */
+    long xPos, xErr, xStep, xRem;
+    long yPos, yErr, yStep, yRem, yFrac, wy0, wy1;
+    int x, y, k;
+
+    if (!pDst || !pSrc || dstW <= 0 || dstH <= 0 || srcW <= 0 || srcH <= 0)
+        return 0;
+
+    xmap = (long*)malloc((size_t)dstW * 2 * sizeof(long));
+    if (!xmap) return 0;
+
+    /* Precompute X mapping (shared by all rows) */
+    xStep = srcW / dstW; xRem = srcW % dstW;
+    xPos = 0; xErr = 0;
+    for (x = 0; x < dstW; x++) {
+        xmap[x * 2 + 0] = xPos;
+        xmap[x * 2 + 1] = (xErr * 256L) / dstW;
+        xPos += xStep; xErr += xRem;
+        if (xErr >= dstW) { xPos++; xErr -= dstW; }
+    }
+
+    yStep = srcH / dstH; yRem = srcH % dstH;
+    yPos = 0; yErr = 0;
+    for (y = 0; y < dstH; y++) {
+        unsigned char *pRow0, *pRow1;
+        long yPos1;
+        yFrac = (yErr * 256L) / dstH;
+        wy0 = 256 - yFrac; wy1 = yFrac;
+        yPos1 = (yPos + 1 < srcH) ? yPos + 1 : yPos;
+        pRow0 = pSrc + (size_t)yPos * srcW * 3;
+        pRow1 = pSrc + (size_t)yPos1 * srcW * 3;
+        for (x = 0; x < dstW; x++) {
+            long xPos1, wx0, wx1, w00, w10, w01, w11;
+            unsigned char *p00, *p10, *p01, *p11, *pOut;
+            xPos1 = (xmap[x * 2 + 0] + 1 < srcW) ? xmap[x * 2 + 0] + 1 : xmap[x * 2 + 0];
+            wx1 = xmap[x * 2 + 1]; wx0 = 256 - wx1;
+            w00 = wx0 * wy0; w10 = wx1 * wy0;
+            w01 = wx0 * wy1; w11 = wx1 * wy1;
+            p00 = pRow0 + xmap[x * 2 + 0] * 3;
+            p10 = pRow0 + xPos1 * 3;
+            p01 = pRow1 + xmap[x * 2 + 0] * 3;
+            p11 = pRow1 + xPos1 * 3;
+            pOut = pDst + ((size_t)y * dstW + x) * 3;
+            for (k = 0; k < 3; k++) {
+                pOut[k] = (unsigned char)(
+                    (p00[k] * w00 + p10[k] * w10 +
+                     p01[k] * w01 + p11[k] * w11) >> 16);
+            }
+        }
+        yPos += yStep; yErr += yRem;
+        if (yErr >= dstH) { yPos++; yErr -= dstH; }
+    }
+    free(xmap);
+    return 1;
+}
+
+/* Rebuild the display DIB from the pristine buffer at dstW x dstH:
+   resize (if needed) -> dither in current FSdither mode -> 24bpp DIB.
+   pOrigData is never modified. The old view is kept on failure. */
+void BuildViewFromOriginal(HWND hwnd, int dstW, int dstH) {
+    int bpp, stride, x, y;
     HDC hdcScreen;
+    HCURSOR hOldCursor;
+    unsigned char *pWork, *pDest;
+    size_t workSize;
+
+    if (!pOrigData || !origW || !origH) return;
+    if (dstW <= 0 || dstH <= 0) return;
+    /* Guard all downstream buffers (work RGB, FS error buf x4, DIB):
+       357913941 px keeps every product under 32 bits */
+    if ((double)dstW * (double)dstH > 357913941.0) {
+        MessageBox(hwnd, "Target size too large", "Error", MB_ICONERROR);
+        return;
+    }
+
+    hOldCursor = SetCursor(LoadCursor(NULL, IDC_WAIT));
+
+    workSize = (size_t)dstW * (size_t)dstH * 3;
+    pWork = (unsigned char*)malloc(workSize);
+    if (!pWork) {
+        SetCursor(hOldCursor);
+        MessageBox(hwnd, "Out of memory", "Error", MB_ICONERROR);
+        return;
+    }
+
+    if (dstW == origW && dstH == origH) {
+        memcpy(pWork, pOrigData, workSize);
+    } else {
+        UpdateWindowTitle(hwnd, "Fitting...");
+        if (!ResizeBilinear24(pWork, dstW, dstH, pOrigData, origW, origH)) {
+            free(pWork);
+            SetCursor(hOldCursor);
+            MessageBox(hwnd, "Out of memory", "Error", MB_ICONERROR);
+            return;
+        }
+    }
+
+    // 2. Optional: Apply Dithering on the work buffer
+    // Detect if we should dither (e.g., if bit depth is low)
+    hdcScreen = GetDC(NULL);
+    bpp = GetDeviceCaps(hdcScreen, BITSPIXEL) * GetDeviceCaps(hdcScreen, PLANES);
+    ReleaseDC(NULL, hdcScreen);
+
+    if (FSdither == 1) { // auto FS dither when target surface bpp <= 8
+        if (bpp <= 8) {
+            UpdateWindowTitle(hwnd, "Dithering...");
+            if (!hPalette)
+                hPalette = Create256ColorPalette();
+            InitAllLUTs();
+            if(bpp == 1) ApplyMonoDithering(pWork, dstW, dstH);
+            else ApplyDithering(pWork, dstW, dstH, (bpp <= 4) ? 16 : 256);
+        }
+    } else if (FSdither > 1) { // force FS dither, to 2 colors when FSdither=2, to 16 colors when FSdither=3, to web-safe 256 colors when FSdither=4
+        UpdateWindowTitle(hwnd, "Dithering...");
+        if (!hPalette)
+            hPalette = Create256ColorPalette();
+        InitAllLUTs();
+        switch (FSdither) {
+            case 2:
+                ApplyMonoDithering(pWork, dstW, dstH);
+                break;
+            case 3:
+            case 4:
+                ApplyDithering(pWork, dstW, dstH, (FSdither == 3) ? 16 : 256);
+        }
+    } // no FS dithering when FSdither=0
+
+    // 3. SINGLE-PASS: Swizzle + Padded + Flip to Bottom-Up
+    UpdateWindowTitle(hwnd, "Rendering...");
+    // Formula: ((Width * BitsPerPixel + 31) / 32) * 4
+    stride = ((dstW * 24 + 31) / 32) * 4;
+
+    // Allocate the destination buffer for GDI
+    // NOTE: pad the allocation - GDI/display drivers can read slightly
+    // past the nominal end of a 24bpp DIB buffer during internal color
+    // conversion. An exact-fit buffer can trigger StretchDIBits failures
+    // (or crashes) on some driver/OS combinations.
+    pDest = (unsigned char*)LocalAlloc(LMEM_FIXED, (size_t)stride * dstH);
+    if (!pDest) {
+        free(pWork);
+        SetCursor(hOldCursor);
+        MessageBox(hwnd, "Out of memory", "Error", MB_ICONERROR);
+        return;
+    }
+
+    for (y = 0; y < dstH; y++) {
+        unsigned char *pSrcRow, *pDestRow;
+        pSrcRow = &pWork[(size_t)y * dstW * 3];
+
+        // Target the rows in reverse order:
+        // When y=0 (top of image), we write to the very last row of pDest.
+        pDestRow = &pDest[(size_t)(dstH - 1 - y) * stride];
+
+        for (x = 0; x < dstW; x++) {
+            pDestRow[x * 3 + 0] = pSrcRow[x * 3 + 2]; // Blue
+            pDestRow[x * 3 + 1] = pSrcRow[x * 3 + 1]; // Green
+            pDestRow[x * 3 + 2] = pSrcRow[x * 3 + 0]; // Red
+        }
+
+        // Note: The "extra" bytes at the end of pDestRow (the padding)
+        // don't need to be initialized; GDI simply ignores them.
+    }
+    free(pWork);
+
+    // 4. Update Global State for Rendering
+    if (pRawData) LocalFree(pRawData); // Free previous image buffer
+    pRawData = pDest;             // Point to our new GDI-compatible buffer
+    imgWidth = dstW;
+    imgHeight = dstH;
+    bFitted = (dstW != origW || dstH != origH);
+
+    // 5. Update BITMAPINFO for StretchDIBits
+    memset(&bmi, 0, sizeof(bmi));
+    bmi.bmiHeader.biSize        = sizeof(BITMAPINFOHEADER);
+    bmi.bmiHeader.biWidth       = dstW;
+    bmi.bmiHeader.biHeight      = dstH; // POSITIVE value = Bottom-Up (Win32s friendly)
+    bmi.bmiHeader.biPlanes      = 1;
+    bmi.bmiHeader.biBitCount    = 24;
+    bmi.bmiHeader.biCompression = BI_RGB;
+
+    // 6. Refresh UI
+    scrollX = 0; scrollY = 0;
+    UpdateScrollbars(hwnd);
+    SetCursor(hOldCursor);
+    UpdateWindowTitle(hwnd, szFile);
+    InvalidateRect(hwnd, NULL, TRUE);
+}
+
+/* One-shot shrink-to-fit: resize the view to the current client area
+   (aspect-preserving, shrink only). Afterwards the image behaves like
+   any 1:1 image (it scrolls if the window is resized) until '-'/`0`. */
+void FitToWindow(HWND hwnd) {
+    RECT rc;
+    int availW, availH, dstW, dstH;
+
+    if (!pOrigData || !origW || !origH) return;
+    GetClientRect(hwnd, &rc); /* already excludes the permanent scrollbars */
+    availW = rc.right; availH = rc.bottom;
+    if (availW <= 0 || availH <= 0) return;
+
+    if (origW <= availW && origH <= availH) {
+        /* Already fits: make sure we're at 100% */
+        if (imgWidth != origW || imgHeight != origH)
+            BuildViewFromOriginal(hwnd, origW, origH);
+        return;
+    }
+
+    FitComputeSize(origW, origH, availW, availH, &dstW, &dstH);
+    BuildViewFromOriginal(hwnd, dstW, dstH);
+}
+
+/* Pure shrink-only aspect-fit math (no window access: unit-testable).
+   Caller guarantees the image does NOT already fit. */
+void FitComputeSize(int origW_, int origH_, int availW, int availH,
+                    int *pDstW, int *pDstH) {
+    int dstW, dstH;
+
+    /* Shrink-only aspect fit (double keeps it overflow-safe, runs once) */
+    if ((double)availW * (double)origH_ < (double)availH * (double)origW_) {
+        dstW = availW;
+        dstH = (int)((double)origH_ * (double)availW / (double)origW_);
+    } else {
+        dstH = availH;
+        dstW = (int)((double)origW_ * (double)availH / (double)origH_);
+    }
+    if (dstW < 1) dstW = 1;
+    if (dstH < 1) dstH = 1;
+
+    *pDstW = dstW; *pDstH = dstH;
+}
+
+void LoadImageFromPath(HWND hwnd, char* filePath) {
+    int imgW = 0, imgH = 0, channels, x;
+    unsigned char *pSrc = NULL, *pNewOrig;
+    char *fileExt;
     simplewebp *swebp;
     j40_image jxlimage;
     MiniTIFF_Image *tiffimg;
@@ -828,17 +1073,23 @@ TrySTB:
         *filePath = 0; // clean filename buffer
         return;
     }
-    // 2. Calculate GDI Stride (DWORD Aligned)
-    // Formula: ((Width * BitsPerPixel + 31) / 32) * 4
-    stride = ((imgW * 24 + 31) / 32) * 4;
-    
-    // Allocate the destination buffer for GDI
-    // NOTE: pad the allocation - GDI/display drivers can read slightly
-    // past the nominal end of a 24bpp DIB buffer during internal color
-    // conversion. An exact-fit buffer can trigger StretchDIBits failures
-    // (or crashes) on some driver/OS combinations.
-    pDest = (unsigned char*)LocalAlloc(LMEM_FIXED, stride * imgH);
-    if (!pDest) {
+    // 2. Stash a canonical pristine copy (packed top-down RGB) and
+    // free the decoder buffer with its own allocator
+    if ((double)imgW * (double)imgH > 357913941.0) {
+        if(isWebp) free(pSrc);
+        else if(isPCX) drpcx_free(pSrc);
+        else if(isTIFF) tiff_free(tiffimg);
+        else if(isJBIG2) stb_jbig2_free(pSrc);
+        else if(isJBIG) stbi_jbig_free(pSrc);
+        else if(isJXL) j40_free(&jxlimage);
+        else if(isAVIF) stb_avif_free(pSrc);
+        else stbi_image_free(pSrc); // Free the original stb_image buffer
+        MessageBox(hwnd, "Image too large", "Error", MB_ICONERROR);
+        *filePath = 0; // clean filename buffer
+        return;
+    }
+    pNewOrig = (unsigned char*)malloc((size_t)imgW * (size_t)imgH * 3);
+    if (!pNewOrig) {
         if(isWebp) free(pSrc);
         else if(isPCX) drpcx_free(pSrc);
         else if(isTIFF) tiff_free(tiffimg);
@@ -850,74 +1101,7 @@ TrySTB:
         MessageBox(hwnd, "Out of memory", "Error", MB_ICONERROR);
         return;
     }
-
-    // 3. Optional: Apply Dithering on the source buffer first
-    // (Use the ApplyDithering function from our previous steps here)
-
-    // Detect if we should dither (e.g., if bit depth is low)
-    hdcScreen = GetDC(NULL);
-    bpp = GetDeviceCaps(hdcScreen, BITSPIXEL) * GetDeviceCaps(hdcScreen, PLANES);
-    ReleaseDC(NULL, hdcScreen);
-
-    if (FSdither == 1) { // auto FS dither when target surface bpp <= 8
-        if (bpp <= 8) {
-            UpdateWindowTitle(hwnd, "Dithering...");
-            if (!hPalette)
-                hPalette = Create256ColorPalette();
-            InitAllLUTs();
-            if(bpp == 1) ApplyMonoDithering(pSrc, imgW, imgH);
-            else ApplyDithering(pSrc, imgW, imgH, (bpp <= 4) ? 16 : 256);
-        }
-    } else if (FSdither > 1) { // force FS dither, to 2 colors when FSdither=2, to 16 colors when FSdither=3, to web-safe 256 colors when FSdither=4
-        UpdateWindowTitle(hwnd, "Dithering...");
-        if (!hPalette)
-            hPalette = Create256ColorPalette();
-        InitAllLUTs();
-        switch (FSdither) {
-            case 2:
-                ApplyMonoDithering(pSrc, imgW, imgH);
-                break;
-            case 3:
-            case 4:
-                ApplyDithering(pSrc, imgW, imgH, (FSdither == 3) ? 16 : 256);
-        }
-    } // no FS dithering when FSdither=0
-
-    // 4. SINGLE-PASS: Swizzle + Padded + Flip to Bottom-Up
-    UpdateWindowTitle(hwnd, "Rendering...");
-    for (y = 0; y < imgH; y++) {
-        unsigned char *pSrcRow, *pDestRow;
-        pSrcRow = &pSrc[y * imgW * 3];
-        
-        // Target the rows in reverse order: 
-        // When y=0 (top of image), we write to the very last row of pDest.
-        pDestRow = &pDest[(imgH - 1 - y) * stride];
-
-        for (x = 0; x < imgW; x++) {
-            pDestRow[x * 3 + 0] = pSrcRow[x * 3 + 2]; // Blue
-            pDestRow[x * 3 + 1] = pSrcRow[x * 3 + 1]; // Green
-            pDestRow[x * 3 + 2] = pSrcRow[x * 3 + 0]; // Red
-        }
-
-        // Note: The "extra" bytes at the end of pDestRow (the padding) 
-        // don't need to be initialized; GDI simply ignores them.
-    }
-
-    // 5. Update Global State for Rendering
-    if (pRawData) LocalFree(pRawData); // Free previous image buffer
-    pRawData = pDest;             // Point to our new GDI-compatible buffer
-    imgWidth = imgW;
-    imgHeight = imgH;
-
-    // 6. Update BITMAPINFO for StretchDIBits
-    memset(&bmi, 0, sizeof(bmi));
-    bmi.bmiHeader.biSize        = sizeof(BITMAPINFOHEADER);
-    bmi.bmiHeader.biWidth       = imgW;
-    bmi.bmiHeader.biHeight      = imgH; // POSITIVE value = Bottom-Up (Win32s friendly)
-    bmi.bmiHeader.biPlanes      = 1;
-    bmi.bmiHeader.biBitCount    = 24;
-    bmi.bmiHeader.biCompression = BI_RGB;
-
+    memcpy(pNewOrig, pSrc, (size_t)imgW * (size_t)imgH * 3);
     if(isWebp) free(pSrc);
     else if(isPCX) drpcx_free(pSrc);
     else if(isTIFF) tiff_free(tiffimg);
@@ -926,14 +1110,15 @@ TrySTB:
     else if(isJXL) j40_free(&jxlimage);
     else if(isAVIF) stb_avif_free(pSrc);
     else stbi_image_free(pSrc); // Free the original stb_image buffer
+    if (pOrigData) free(pOrigData);
+    pOrigData = pNewOrig;
+    origW = imgW; origH = imgH;
 
-    // Copy filename to global
+    // Copy filename to global (before BuildView so the title restores)
     if(filePath != szFile) strcpy(szFile, filePath);
 
-    // 7. Refresh UI
-    scrollX = 0; scrollY = 0;
-    UpdateScrollbars(hwnd);
-    InvalidateRect(hwnd, NULL, TRUE);
+    // 3. Build the 100% view (resize + dither + DIB) from pristine
+    BuildViewFromOriginal(hwnd, imgW, imgH);
 }
 
 void SaveFile(HWND hwnd) {
@@ -979,7 +1164,7 @@ void OpenPicFile(HWND hwnd) {
 
 void UpdateWindowTitle(HWND hwnd, char* filePath) {
     char newTitle[500];
-    wsprintf(newTitle, "%s (D=%d) - %s", MAINWIN_TITLE, FSdither, *filePath ? filePath : MAINWIN_TITLE_SUFFIX);
+    wsprintf(newTitle, "%s (D=%d%s) - %s", MAINWIN_TITLE, FSdither, bFitted ? ",Fit" : "", *filePath ? filePath : MAINWIN_TITLE_SUFFIX);
     SetWindowText(hwnd, newTitle);
 }
 
@@ -1335,10 +1520,24 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam) 
                     break;
                 case 'D':
                     FSdither = FSdither == 4 ? 0 : FSdither+1;
-                    UpdateWindowTitle(hwnd, szFile);
+                    if (pOrigData) /* re-derive current view live in the new mode */
+                        BuildViewFromOriginal(hwnd, imgWidth, imgHeight);
+                    else
+                        UpdateWindowTitle(hwnd, szFile);
                     break;
                 case 'S':
                     SaveFile(hwnd);
+                    break;
+
+                // View Operations (explicit one-shot, no auto-resize on WM_SIZE)
+                case VK_OEM_MINUS:
+                case VK_SUBTRACT: /* numpad '-' */
+                    FitToWindow(hwnd);
+                    break;
+                case '0':
+                case VK_NUMPAD0:
+                    if (pOrigData && (imgWidth != origW || imgHeight != origH))
+                        BuildViewFromOriginal(hwnd, origW, origH);
                     break;
                 case VK_ESCAPE:
                     PostQuitMessage(0);
@@ -1458,6 +1657,7 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam) 
         case WM_DESTROY:
             if (hPalette) DeleteObject(hPalette);
             if (pRawData) LocalFree(pRawData);
+            if (pOrigData) free(pOrigData);
             PostQuitMessage(0);
             return 0;
     }

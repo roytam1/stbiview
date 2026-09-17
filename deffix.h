@@ -9,6 +9,10 @@
 #define WM_CAPTURECHANGED 0x0215
 #endif
 
+#ifndef VK_OEM_MINUS
+#define VK_OEM_MINUS 0xBD
+#endif
+
 #ifndef VER_PLATFORM_WIN32_WINDOWS
 /* very old WinSDK, putting more defines inside this guard */
 #define VER_PLATFORM_WIN32_WINDOWS 1

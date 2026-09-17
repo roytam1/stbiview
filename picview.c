@@ -969,7 +969,7 @@ void OpenPicFile(HWND hwnd) {
     ofn.hwndOwner = hwnd;
     ofn.lpstrFile = szFile;
     ofn.nMaxFile = sizeof(szFile);
-    ofn.lpstrFilter = "Images\0*.jpg;*.png;*.gif;*.bmp;*.tga;*.pnm;*.ppm;*.pgm;*.pbm;*.webp;*.web;*.wbp;*.pcx;*.xbm;*.xpm;*.msp;*.qoi;*.jxl;*.tif;*.tiff;*.mag;*.p2;*.avif;*.ivf;*.jb2;*.jbig2;*.jbg;*.jbig\0All Files\0*.*\0";
+    ofn.lpstrFilter = "Images\0*.jpg;*.png;*.gif;*.bmp;*.tga;*.pnm;*.ppm;*.pgm;*.pbm;*.pam;*.webp;*.web;*.wbp;*.pcx;*.xbm;*.xpm;*.msp;*.qoi;*.jxl;*.tif;*.tiff;*.mag;*.p2;*.avif;*.ivf;*.jb2;*.jbig2;*.jbg;*.jbig\0All Files\0*.*\0";
     ofn.Flags = OFN_PATHMUSTEXIST | OFN_FILEMUSTEXIST;
 
     if (GetOpenFileName(&ofn)) {

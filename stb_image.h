@@ -7500,7 +7500,7 @@ static int      stbi__pnm_test(stbi__context *s)
    char p, t;
    p = (char) stbi__get8(s);
    t = (char) stbi__get8(s);
-   if (p != 'P' || (t != '4' && t != '5' && t != '6')) {
+   if (p != 'P' || (t != '4' && t != '5' && t != '6' && t != '7')) {
        stbi__rewind( s );
        return 0;
    }
@@ -7619,7 +7619,7 @@ static int      stbi__pnm_info(stbi__context *s, int *x, int *y, int *comp, char
    // Get identifier
    p = (char) stbi__get8(s);
    t = (char) stbi__get8(s);
-   if (p != 'P' || (t != '4' && t != '5' && t != '6')) {
+   if (p != 'P' || (t != '4' && t != '5' && t != '6' && t != '7')) {
        stbi__rewind(s);
        return 0;
    }
@@ -7642,6 +7642,123 @@ static int      stbi__pnm_info(stbi__context *s, int *x, int *y, int *comp, char
       if (*y == 0)
           return stbi__err("invalid height", "PNM image header had zero or overflowing height");
 
+      return 8;
+   }
+
+   if (t == '7') {
+      /* P7 (PAM): line-based header, then raw raster */
+      char line[256];
+      int width, height, depth, maxval;
+      int haveW, haveH, haveD, haveM;
+      int len, i, v;
+      stbi_uc ch;
+
+      width = 0; height = 0; depth = 0; maxval = 0;
+      haveW = 0; haveH = 0; haveD = 0; haveM = 0;
+
+      for (;;) {
+         /* read one header line (up to '\n'), truncating overlong lines */
+         len = 0;
+         for (;;) {
+            if (stbi__at_eof(s))
+               break;
+            ch = stbi__get8(s);
+            if (ch == '\n')
+               break;
+            if (len < 255)
+               line[len++] = (char) ch;
+         }
+         line[len] = '\0';
+         if (len > 0 && line[len - 1] == '\r')
+            line[--len] = '\0'; /* tolerate CRLF */
+
+         if (len == 0) {
+            if (stbi__at_eof(s))
+               return stbi__err("bad PAM header", "PAM header truncated");
+            continue; /* skip blank lines */
+         }
+         if (line[0] == '#')
+            continue; /* comment */
+         if (strncmp(line, "ENDHDR", 6) == 0 &&
+             (line[6] == '\0' || line[6] == ' ' || line[6] == '\t'))
+            break;
+         if (strncmp(line, "TUPLTYPE", 8) == 0 &&
+             (line[8] == '\0' || line[8] == ' ' || line[8] == '\t'))
+            continue; /* ignored: DEPTH already describes the tuple */
+         if (strncmp(line, "COMMENT", 7) == 0 &&
+             (line[7] == '\0' || line[7] == ' ' || line[7] == '\t'))
+            continue;
+         if (strncmp(line, "WIDTH ", 6) == 0) {
+            i = 6;
+            while (line[i] == ' ' || line[i] == '\t') ++i;
+            if (line[i] < '0' || line[i] > '9')
+               return stbi__err("bad PAM header", "Invalid WIDTH in PAM header");
+            v = 0;
+            while (line[i] >= '0' && line[i] <= '9') {
+               v = v * 10 + (line[i] - '0');
+               ++i;
+               if (v > 214748364)
+                  return stbi__err("integer parse overflow", "WIDTH in PAM header overflowed a 32-bit int");
+            }
+            width = v; haveW = 1;
+            continue;
+         }
+         if (strncmp(line, "HEIGHT ", 7) == 0) {
+            i = 7;
+            while (line[i] == ' ' || line[i] == '\t') ++i;
+            if (line[i] < '0' || line[i] > '9')
+               return stbi__err("bad PAM header", "Invalid HEIGHT in PAM header");
+            v = 0;
+            while (line[i] >= '0' && line[i] <= '9') {
+               v = v * 10 + (line[i] - '0');
+               ++i;
+               if (v > 214748364)
+                  return stbi__err("integer parse overflow", "HEIGHT in PAM header overflowed a 32-bit int");
+            }
+            height = v; haveH = 1;
+            continue;
+         }
+         if (strncmp(line, "DEPTH ", 6) == 0) {
+            i = 6;
+            while (line[i] == ' ' || line[i] == '\t') ++i;
+            if (line[i] < '0' || line[i] > '9')
+               return stbi__err("bad PAM header", "Invalid DEPTH in PAM header");
+            v = 0;
+            while (line[i] >= '0' && line[i] <= '9') {
+               v = v * 10 + (line[i] - '0');
+               ++i;
+            }
+            depth = v; haveD = 1;
+            continue;
+         }
+         if (strncmp(line, "MAXVAL ", 7) == 0) {
+            i = 7;
+            while (line[i] == ' ' || line[i] == '\t') ++i;
+            if (line[i] < '0' || line[i] > '9')
+               return stbi__err("bad PAM header", "Invalid MAXVAL in PAM header");
+            v = 0;
+            while (line[i] >= '0' && line[i] <= '9') {
+               v = v * 10 + (line[i] - '0');
+               ++i;
+            }
+            maxval = v; haveM = 1;
+            continue;
+         }
+         return stbi__err("bad PAM header", "Unrecognized PAM header record");
+      }
+
+      if (!haveW || !haveH || !haveD || !haveM)
+         return stbi__err("bad PAM header", "PAM header missing WIDTH, HEIGHT, DEPTH or MAXVAL");
+      if (width <= 0 || height <= 0)
+         return stbi__err("invalid size", "PAM image header had zero width or height");
+      if (depth < 1 || depth > 4)
+         return stbi__err("bad PAM DEPTH", "PAM supports only DEPTH 1..4");
+      if (maxval < 1 || maxval > 255)
+         return stbi__err("bad PAM MAXVAL", "PAM supports only 8-bit (MAXVAL 1..255) images");
+
+      *x = width;
+      *y = height;
+      *comp = depth;
       return 8;
    }
 

@@ -9,7 +9,7 @@ A high-performance, lightweight image viewer specifically engineered for **Windo
 * **Custom Generic 256 Color Palette:** Based on ["win8" palette](https://web.archive.org/web/20250227072942/https://eisbox.net/downloads/palettes/win-8.txt) with some modifications on both palette and `FindClosestColor` function.
 * **Universal Format Support:**
     * **Modern:** QOI (Quite OK Image), WebP, AVIF (not all features are supported), JPEG XL, JPG, PNG, GIF (without animation), JBIG2 (first page only), BMP, Y4M (including monochrome `Cmono`/`C400`).
-    * **Retro/Unix:** PCX, TGA, TIFF (Classic TIFF, BigTIFF and some encodings are not supported), MAG, PIC2 (.p2), MSP, PBM (P4 binary), PNM, PGM, PPM, PAM (P7, 8-bit up to RGBA), JBIG, XBM (X-BitMap) and XPM (X-PixMap).
+    * **Retro/Unix:** PCX, TGA, TIFF (Classic TIFF, BigTIFF and some encodings are not supported), MAG, PIC2 (.p2), MSP, GEM Raster (.img/.ximg/.timg), PBM (P4 binary), PNM, PGM, PPM, PAM (P7, 8-bit up to RGBA), JBIG, XBM (X-BitMap) and XPM (X-PixMap).
 * **Explicit Fit-to-Window:** Press `-` for a one-shot aspect-preserving shrink-to-fit (shrink only, never upscale); `0` returns to 100%. Nothing re-renders on window resize afterwards, keeping 486-class machines responsive.
 * **Pristine + View Pipeline:** The decoded image is kept untouched in memory while display and saving work on a derived view, so re-fitting or changing dither mode never needs a reload from disk.
 * **Smooth Drag-to-Scroll:** An "Acrobat-style" Hand Tool for panning large images, utilizing `SetCapture` and `ScrollWindowEx` for tear-free movement.
@@ -80,6 +80,7 @@ On a 486SX, every clock cycle counts. The image processing pipeline follows thes
 * `stb_avif.h` ([https://github.com/roytam1/stb_avif/tree/chatgpt](https://github.com/roytam1/stb_avif/tree/chatgpt))
 * `stb_jbig.h` ([https://github.com/roytam1/stb_jbig](https://github.com/roytam1/stb_jbig))
 * `stb_jbig2.h` ([https://github.com/roytam1/stb_jbig2](https://github.com/roytam1/stb_jbig2))
+* `stb_gemras.h` ([https://github.com/roytam1/stb_gemras](https://github.com/roytam1/stb_gemras))
 * `GDI32.lib`, `USER32.lib`, `COMDLG32.lib`
 
 ## 📝 Limitations & Notes

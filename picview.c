@@ -909,7 +909,7 @@ void LoadImageFromPath(HWND hwnd, char* filePath) {
     simplewebp *swebp;
     j40_image jxlimage;
     MiniTIFF_Image *tiffimg;
-    int isWebp = 0, isJXL = 0, isPCX = 0, isTIFF = 0, isAVIF = 0, isJBIG2 = 0, isJBIG = 0, swRet;
+    int isWebp = 0, isJXL = 0, isPCX = 0, isTIFF = 0, isAVIF = 0, isJBIG2 = 0, isJBIG = 0, isGEMRAS = 0, swRet;
     char errBuf[MAX_PATH + 50];
 
     UpdateWindowTitle(hwnd, "Loading...");
@@ -1061,6 +1061,15 @@ void LoadImageFromPath(HWND hwnd, char* filePath) {
         pSrc = LoadMSP(filePath, &imgW, &imgH);
     }
     else
+    if(fileExt &&
+        (stricmp(fileExt,".ximg") == 0 ||
+         stricmp(fileExt,".timg") == 0 ||
+         stricmp(fileExt,".img") == 0)) {
+        int comp = 3;
+        isGEMRAS = 1;
+        pSrc = stb_gemras_load(filePath, &imgW, &imgH, &comp, comp);
+    }
+    else
     {
 TrySTB:
         // 1. Load raw packed RGB data from stb_image
@@ -1097,6 +1106,7 @@ TrySTB:
         else if(isJBIG) stbi_jbig_free(pSrc);
         else if(isJXL) j40_free(&jxlimage);
         else if(isAVIF) stb_avif_free(pSrc);
+        else if(isGEMRAS) stb_gemras_free(pSrc);
         else stbi_image_free(pSrc); // Free the original stb_image buffer
         MessageBox(hwnd, "Out of memory", "Error", MB_ICONERROR);
         return;
@@ -1109,6 +1119,7 @@ TrySTB:
     else if(isJBIG) stbi_jbig_free(pSrc);
     else if(isJXL) j40_free(&jxlimage);
     else if(isAVIF) stb_avif_free(pSrc);
+    else if(isGEMRAS) stb_gemras_free(pSrc);
     else stbi_image_free(pSrc); // Free the original stb_image buffer
     if (pOrigData) free(pOrigData);
     pOrigData = pNewOrig;

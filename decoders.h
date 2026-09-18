@@ -47,6 +47,10 @@
 #endif
 #endif
 
+/* stb_gemras for GEM Raster (.img/.ximg/.timg) image format */
+#define STB_GEMRAS_IMPLEMENTATION
+#include "stb_gemras.h"
+
 /* Internal Decoder: XBM format */
 
 unsigned char* LoadXBM(const char* szPath, int* w, int* h) {

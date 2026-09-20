@@ -1097,6 +1097,19 @@ void LoadImageFromPath(HWND hwnd, char* filePath) {
         }
     }
     else
+    if(fileExt && stricmp(fileExt,".gif") == 0) {
+        /* Animated GIF frame viewing via stb_image GIF APIs (P/N to step).
+           Still GIFs fall through to the generic TrySTB path unchanged.
+           The frame buffer is stb-owned, so it frees via stbi_image_free. */
+        int frames = 0, delay = 0;
+        if (stbi_gif_count(filePath, NULL, NULL, &frames) && frames > 1) {
+            pageCount = frames;
+            pSrc = stbi_load_gif_frame(filePath, page, &delay, &imgW, &imgH, &channels, 3);
+        } else {
+            goto TrySTB;
+        }
+    }
+    else
     {
 TrySTB:
         // 1. Load raw packed RGB data from stb_image

@@ -1015,8 +1015,9 @@ void LoadImageFromPath(HWND hwnd, char* filePath) {
     if(fileExt && /* JBIG2 must be tested earlier than JBIG(1) */
         (stricmp(fileExt,".jbig2") == 0 ||
          stricmp(fileExt,".jb2") == 0)) {
+        int total_pages = 0;
         isJBIG2 = 1;
-        pSrc = stb_jbig2_decode_file(filePath, &imgW, &imgH);
+        pSrc = stb_jbig2_decode_file(filePath, 0, &imgW, &imgH, &total_pages);
     }
     else
     if(fileExt &&

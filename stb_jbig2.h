@@ -21,7 +21,7 @@ extern "C" {
 
 unsigned char *stb_jbig2_decode(const unsigned char *data, int size, int *width, int *height);
 unsigned char *stb_jbig2_decode_embedded(const unsigned char *data, int size, int *width, int *height);
-unsigned char *stb_jbig2_decode_file(const char *filename, int *width, int *height);
+unsigned char *stb_jbig2_decode_file(const char *filename, int page, int *width, int *height, int *num_pages);
 void stb_jbig2_free(void *p);
 
 typedef struct stb_jbig2_context stb_jbig2_context;
@@ -1417,10 +1417,15 @@ unsigned char *stb_jbig2_decode_embedded(const unsigned char *data, int size, in
 
 void stb_jbig2_free(void *p) { free(p); }
 
-unsigned char *stb_jbig2_decode_file(const char *filename, int *width, int *height) {
+unsigned char *stb_jbig2_decode_file(const char *filename, int page, int *width, int *height, int *num_pages) {
     FILE *f; unsigned char *data; long size;
-    unsigned char *bits, *rgb;
-    int w, h, x, y;
+    stb_jbig2_context *ctx; stb_jbig2_image *pimg;
+    unsigned char *rgb = NULL;
+    int w = 0, h = 0, idx = 0;
+    if (width) *width = 0;
+    if (height) *height = 0;
+    if (num_pages) *num_pages = 0;
+    if (!filename || page < 0) return NULL;
     f = fopen(filename, "rb");
     if (!f) return NULL;
     fseek(f, 0, SEEK_END); size = ftell(f); fseek(f, 0, SEEK_SET);
@@ -1429,23 +1434,34 @@ unsigned char *stb_jbig2_decode_file(const char *filename, int *width, int *heig
     if (!data) { fclose(f); return NULL; }
     if ((long)fread(data, 1, (size_t)size, f) != size) { free(data); fclose(f); return NULL; }
     fclose(f);
-    bits = stb_jbig2_decode(data, (int)size, &w, &h);
+    ctx = stb_jbig2_create(NULL);
+    if (!ctx) { free(data); return NULL; }
+    stb_jbig2_submit(ctx, data, (int)size);
     free(data);
-    if (!bits) return NULL;
-    rgb = (unsigned char *)malloc((size_t)w * (size_t)h * 3);
-    if (rgb) {
-        int stride = (w + 7) >> 3;
-        for (y = 0; y < h; y++) {
-            for (x = 0; x < w; x++) {
-                int bit = (bits[y * stride + (x >> 3)] >> (7 - (x & 7))) & 1;
-                unsigned char c = bit ? 0 : 255;
-                int off = (y * w + x) * 3;
-                rgb[off] = c; rgb[off+1] = c; rgb[off+2] = c;
+    while ((pimg = stb_jbig2_page_out(ctx)) != NULL) {
+        if (idx == page) {
+            int x, y, stride;
+            w = (int)pimg->width; h = (int)pimg->height; stride = (int)pimg->stride;
+            rgb = (unsigned char *)malloc((size_t)w * (size_t)h * 3);
+            if (rgb) {
+                for (y = 0; y < h; y++) {
+                    for (x = 0; x < w; x++) {
+                        int bit = (pimg->data[y * stride + (x >> 3)] >> (7 - (x & 7))) & 1;
+                        unsigned char c = bit ? 0 : 255;
+                        int off = (y * w + x) * 3;
+                        rgb[off] = c; rgb[off+1] = c; rgb[off+2] = c;
+                    }
+                }
             }
         }
+        idx++;
+        stb_jbig2_release_page(ctx, pimg);
     }
-    stb_jbig2_free(bits);
-    *width = w; *height = h;
+    stb_jbig2_destroy(ctx);
+    if (num_pages) *num_pages = idx;
+    if (!rgb) return NULL;
+    if (width) *width = w;
+    if (height) *height = h;
     return rgb;
 }
 

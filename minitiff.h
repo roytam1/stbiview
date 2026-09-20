@@ -169,6 +169,7 @@ typedef struct MiniTIFF_Image {
     unsigned long channels;
     unsigned long bits_per_channel;
     unsigned short orientation;
+    unsigned short total_pages;
     unsigned char *pixels;
 } MiniTIFF_Image;
 
@@ -2419,31 +2420,12 @@ static int tiff_jpeg_decode(const unsigned char *src,
 
 #ifdef MINITIFF_USE_STB_JBIG
 
-/*
-    JBIG-in-TIFF strips do not include the 20-byte BIH (Basic Information
-    Header) that the JBIG decoder expects.  We reconstruct the BIH from the
-    TIFF tags: ImageWidth, ImageLength and SamplesPerPixel.
-
-    BIH layout (20 bytes, big-endian):
-        0   DL        (differential layer, 0 for base)
-        1   D         (highest layer, 0 for base)
-        2   planes    (number of bit planes)
-        3   reserved  (0)
-        4-7 XLW       (width of image)
-        8-11  YLW     (height of image)
-        12-15 L0      (recommended stripe length, 128 = standard default)
-        16  MX        (max horizontal offset, 0 = default)
-        17  MY        (max vertical offset, 0 = default)
-        18  order     (0 = default: stripe-first, MSB-first)
-        19  options   (0 = default)
-*/
 static int tiff_jbig_decode(const unsigned char *src,
                             size_t src_size,
                             unsigned char *dst,
                             size_t dst_size,
                             unsigned long expected_width,
-                            unsigned long expected_height,
-                            unsigned short samples_per_pixel)
+                            unsigned long expected_height)
 {
     int width;
     int height;
@@ -2467,9 +2449,6 @@ static int tiff_jbig_decode(const unsigned char *src,
         return 0;
     }
 
-    /* stb_jbig returns packed 1bpp, MSB-first, byte-aligned per row.
-       Output size = ((width + 7) / 8) * height, matching TIFF's
-       destination buffer layout. */
     packed_size = ((expected_width + 7UL) / 8UL) * expected_height;
     if (packed_size != dst_size) {
         stbi_jbig_free(decoded);
@@ -2920,7 +2899,7 @@ static int tiff_decode_block(const TIFF_Context *tiff,
 #ifdef MINITIFF_USE_STB_JBIG
     case 34661:
         return tiff_jbig_decode(tiff->data + offset, (size_t)byte_count, destination, destination_size,
-                                block_width, block_height, page->samples_per_pixel);
+                                block_width, block_height);
 #else
     case 34661:
         return 0;
@@ -3440,6 +3419,9 @@ MiniTIFF_Image *tiff_load(const void *data,
 
     tiff_page_free(&page);
 
+    if (image)
+        image->total_pages = (unsigned short)tiff_count_ifds(&tiff);
+
     return image;
 }
 
@@ -3577,8 +3559,9 @@ int main(int argc, char **argv)
     }
 
     fclose(out);
-    printf("%lu x %lu PPM written to %s\n",
-           image->width, image->height, argv[2]);
+    printf("%lu x %lu PPM written to %s (page %u of %u)\n",
+           image->width, image->height, argv[2],
+           page + 1, image->total_pages);
 
     tiff_free(image);
     return 0;

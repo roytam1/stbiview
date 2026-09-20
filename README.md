@@ -58,6 +58,7 @@ On a 486SX, every clock cycle counts. The image processing pipeline follows thes
 | **'D'** | Change Dither Mode, re-applied live to the current view (0=No Dithering, 1=Dithering depends on display bitdepth, 2=Force Mono Dithering, 3=Force 16-colors Dithering, 4=Force 256-colors Dithering) |
 | **'-'** (or numpad `-`) | One-shot shrink-to-fit: resize display image to the client area, aspect-preserving, shrink only |
 | **'0'** (or numpad `0`) | Return to 100% size |
+| **'P'** / **'N'** | Previous / next page in multi-page TIFF and JBIG2 files (no-op on single-page images); fit and dither mode are preserved across pages |
 | **Esc** | Quit |
 
 ## 🏗 Building

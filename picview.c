@@ -336,7 +336,7 @@ void UpdateScrollbars(HWND hwnd);
 void LoadImageFromPath(HWND hwnd, char* filePath);
 void OpenPicFile(HWND hwnd);
 void BuildViewFromOriginal(HWND hwnd, int dstW, int dstH);
-void FitToWindow(HWND hwnd);
+void FitToWindow(HWND hwnd, int force);
 void FitComputeSize(int origW_, int origH_, int availW, int availH,
                     int *pDstW, int *pDstH);
 int ResizeBilinear24(unsigned char* pDst, int dstW, int dstH,
@@ -349,6 +349,8 @@ unsigned char* pRawData = NULL; // Display DIB (bottom-up BGR, padded) - derived
 unsigned char* pOrigData = NULL; // Pristine decoded RGB (top-down, packed) - never dithered
 int origW = 0, origH = 0; // Pristine dimensions
 int bFitted = 0; // View is a fitted (resized) derivative, not 100%
+int pageIndex = 0, pageCount = 1; // Multi-page state (TIFF/JBIG2)
+int navPage = -1; // >=0: page navigation request consumed by LoadImageFromPath
 char szFile[260] = {0};
 int imgWidth = 0, imgHeight = 0;
 int scrollX = 0, scrollY = 0;
@@ -862,7 +864,7 @@ void BuildViewFromOriginal(HWND hwnd, int dstW, int dstH) {
 /* One-shot shrink-to-fit: resize the view to the current client area
    (aspect-preserving, shrink only). Afterwards the image behaves like
    any 1:1 image (it scrolls if the window is resized) until '-'/`0`. */
-void FitToWindow(HWND hwnd) {
+void FitToWindow(HWND hwnd, int force) {
     RECT rc;
     int availW, availH, dstW, dstH;
 
@@ -872,8 +874,10 @@ void FitToWindow(HWND hwnd) {
     if (availW <= 0 || availH <= 0) return;
 
     if (origW <= availW && origH <= availH) {
-        /* Already fits: make sure we're at 100% */
-        if (imgWidth != origW || imgHeight != origH)
+        /* Already fits: make sure we're at 100%.
+           force (page nav) always rebuilds: pristine changed under the view,
+           so matching dims don't imply matching pixels. */
+        if (force || imgWidth != origW || imgHeight != origH)
             BuildViewFromOriginal(hwnd, origW, origH);
         return;
     }
@@ -903,7 +907,7 @@ void FitComputeSize(int origW_, int origH_, int availW, int availH,
 }
 
 void LoadImageFromPath(HWND hwnd, char* filePath) {
-    int imgW = 0, imgH = 0, channels, x;
+    int imgW = 0, imgH = 0, channels, x, page, isNav;
     unsigned char *pSrc = NULL, *pNewOrig;
     char *fileExt;
     simplewebp *swebp;
@@ -913,6 +917,10 @@ void LoadImageFromPath(HWND hwnd, char* filePath) {
     char errBuf[MAX_PATH + 50];
 
     UpdateWindowTitle(hwnd, "Loading...");
+
+    if (navPage >= 0) { page = navPage; isNav = 1; }
+    else { page = 0; isNav = 0; pageIndex = 0; pageCount = 1; }
+    navPage = -1;
 
     fileExt = strrchr(filePath, '.');
 
@@ -998,10 +1006,11 @@ void LoadImageFromPath(HWND hwnd, char* filePath) {
         (stricmp(fileExt,".tiff") == 0 ||
          stricmp(fileExt,".tif") == 0)) {
         isTIFF = 1;
-        tiffimg = tiff_load_file(filePath, 0);
+        tiffimg = tiff_load_file(filePath, (unsigned)page);
         if(tiffimg) {
             imgW = tiffimg->width;
             imgH = tiffimg->height;
+            pageCount = (tiffimg->total_pages > 1) ? tiffimg->total_pages : 1;
             pSrc = tiffimg->pixels;
 
             for(x=0; x < imgW*imgH; x++) {
@@ -1017,7 +1026,8 @@ void LoadImageFromPath(HWND hwnd, char* filePath) {
          stricmp(fileExt,".jb2") == 0)) {
         int total_pages = 0;
         isJBIG2 = 1;
-        pSrc = stb_jbig2_decode_file(filePath, 0, &imgW, &imgH, &total_pages);
+        pSrc = stb_jbig2_decode_file(filePath, page, &imgW, &imgH, &total_pages);
+        if (pSrc) pageCount = (total_pages > 1) ? total_pages : 1;
     }
     else
     if(fileExt &&
@@ -1129,8 +1139,14 @@ TrySTB:
     // Copy filename to global (before BuildView so the title restores)
     if(filePath != szFile) strcpy(szFile, filePath);
 
-    // 3. Build the 100% view (resize + dither + DIB) from pristine
-    BuildViewFromOriginal(hwnd, imgW, imgH);
+    // 3. Build the view from pristine.
+    // Fresh file: 100%. Page nav: preserve fit (refit recomputes for the
+    // new page's dims, since pages may differ in size).
+    pageIndex = page;
+    if (isNav && bFitted)
+        FitToWindow(hwnd, 1);
+    else
+        BuildViewFromOriginal(hwnd, imgW, imgH);
 }
 
 void SaveFile(HWND hwnd) {
@@ -1176,7 +1192,11 @@ void OpenPicFile(HWND hwnd) {
 
 void UpdateWindowTitle(HWND hwnd, char* filePath) {
     char newTitle[500];
-    wsprintf(newTitle, "%s (D=%d%s) - %s", MAINWIN_TITLE, FSdither, bFitted ? ",Fit" : "", *filePath ? filePath : MAINWIN_TITLE_SUFFIX);
+    char pageStr[32];
+    pageStr[0] = '\0';
+    if (pageCount > 1)
+        wsprintf(pageStr, ",P%d/%d", pageIndex + 1, pageCount);
+    wsprintf(newTitle, "%s (D=%d%s%s) - %s", MAINWIN_TITLE, FSdither, bFitted ? ",Fit" : "", pageStr, *filePath ? filePath : MAINWIN_TITLE_SUFFIX);
     SetWindowText(hwnd, newTitle);
 }
 
@@ -1544,12 +1564,26 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam) 
                 // View Operations (explicit one-shot, no auto-resize on WM_SIZE)
                 case VK_OEM_MINUS:
                 case VK_SUBTRACT: /* numpad '-' */
-                    FitToWindow(hwnd);
+                    FitToWindow(hwnd, 0);
                     break;
                 case '0':
                 case VK_NUMPAD0:
                     if (pOrigData && (imgWidth != origW || imgHeight != origH))
                         BuildViewFromOriginal(hwnd, origW, origH);
+                    break;
+
+                // Multi-page navigation (TIFF/JBIG2; silent no-op when pageCount <= 1)
+                case 'P':
+                    if (pageCount > 1 && pageIndex > 0) {
+                        navPage = pageIndex - 1;
+                        LoadImageFromPath(hwnd, szFile);
+                    }
+                    break;
+                case 'N':
+                    if (pageCount > 1 && pageIndex < pageCount - 1) {
+                        navPage = pageIndex + 1;
+                        LoadImageFromPath(hwnd, szFile);
+                    }
                     break;
                 case VK_ESCAPE:
                     PostQuitMessage(0);

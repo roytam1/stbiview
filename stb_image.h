@@ -433,6 +433,38 @@ STBIDEF stbi_uc *stbi_load_from_file  (FILE *f, int *x, int *y, int *channels_in
 STBIDEF stbi_uc *stbi_load_gif_from_memory(stbi_uc const *buffer, int len, int **delays, int *x, int *y, int *z, int *comp, int req_comp);
 #endif
 
+#ifndef STBI_NO_PNG
+typedef struct
+{
+   unsigned int width, height, x_offset, y_offset;
+   unsigned short delay_num, delay_den;
+   unsigned char dispose_op, blend_op;
+} stbi_apng_frame_info;
+#define STBI_APNG_DISPOSE_NONE 0
+#define STBI_APNG_DISPOSE_BACKGROUND 1
+#define STBI_APNG_DISPOSE_PREVIOUS 2
+#define STBI_APNG_BLEND_SOURCE 0
+#define STBI_APNG_BLEND_OVER 1
+STBIDEF int stbi_is_apng_from_memory(stbi_uc const *buffer, int len);
+STBIDEF int stbi_is_apng_from_callbacks(stbi_io_callbacks const *clbk, void *user);
+STBIDEF int stbi_apng_count_from_memory(stbi_uc const *buffer, int len, int *x, int *y, int *frames, int *plays);
+STBIDEF int stbi_apng_count_from_callbacks(stbi_io_callbacks const *clbk, void *user, int *x, int *y, int *frames, int *plays);
+STBIDEF int stbi_apng_get_frame_info_from_memory(stbi_uc const *buffer, int len, int frame_index, stbi_apng_frame_info *info);
+STBIDEF int stbi_apng_get_frame_info_from_callbacks(stbi_io_callbacks const *clbk, void *user, int frame_index, stbi_apng_frame_info *info);
+STBIDEF stbi_uc *stbi_load_apng_frame_from_memory(stbi_uc const *buffer, int len, int frame_index, int *x, int *y, int *comp, int req_comp);
+STBIDEF stbi_uc *stbi_load_apng_frame_from_callbacks(stbi_io_callbacks const *clbk, void *user, int frame_index, int *x, int *y, int *comp, int req_comp);
+#ifndef STBI_NO_STDIO
+STBIDEF int stbi_is_apng(char const *filename);
+STBIDEF int stbi_is_apng_from_file(FILE *f);
+STBIDEF int stbi_apng_count(char const *filename, int *x, int *y, int *frames, int *plays);
+STBIDEF int stbi_apng_count_from_file(FILE *f, int *x, int *y, int *frames, int *plays);
+STBIDEF int stbi_apng_get_frame_info(char const *filename, int frame_index, stbi_apng_frame_info *info);
+STBIDEF int stbi_apng_get_frame_info_from_file(FILE *f, int frame_index, stbi_apng_frame_info *info);
+STBIDEF stbi_uc *stbi_load_apng_frame(char const *filename, int frame_index, int *x, int *y, int *comp, int req_comp);
+STBIDEF stbi_uc *stbi_load_apng_frame_from_file(FILE *f, int frame_index, int *x, int *y, int *comp, int req_comp);
+#endif
+#endif
+
 #ifdef STBI_WINDOWS_UTF8
 STBIDEF int stbi_convert_wchar_to_utf8(char *buffer, size_t bufferlen, const wchar_t* input);
 #endif
@@ -5342,6 +5374,957 @@ static int stbi__png_is16(stbi__context *s)
    }
    return 1;
 }
+
+/* Animated PNG (APNG) frame-viewer extension.
+   TIFF-like indexed access to composited canvases.
+   Each page is a full IHDR W*H RGBA canvas (converted to req_comp on return).
+   Static PNG is treated as 1 frame for uniform viewing. */
+#define STBI__APNG_MAX_FRAMES 100000
+#define STBI__APNG_MAX_CHUNK (1u << 30)
+
+typedef struct
+{
+   stbi__uint32 w, h, xoff, yoff;
+   stbi__uint16 delay_num, delay_den;
+   stbi_uc dispose_op, blend_op;
+   stbi_uc *data;
+   stbi__uint32 data_len, data_cap;
+} stbi__apng_frame_raw;
+
+typedef struct
+{
+   stbi__uint32 canvas_w, canvas_h;
+   int depth, color, interlace;
+   int base_img_n;
+   stbi_uc palette[1024];
+   stbi__uint32 pal_len;
+   int pal_img_n;
+   int has_trans;
+   stbi_uc tc[3];
+   stbi__uint16 tc16[3];
+   int is_iphone;
+   stbi__uint32 num_frames_actl;
+   stbi__uint32 num_plays;
+   int has_actl;
+   int default_is_first;
+   stbi__apng_frame_raw *frames;
+   stbi__uint32 frames_len, frames_cap;
+   stbi_uc *default_data;
+   stbi__uint32 default_len, default_cap;
+} stbi__apng_info;
+
+static void stbi__apng_free_info(stbi__apng_info *info)
+{
+   stbi__uint32 i;
+   if (info->frames) {
+      for (i = 0; i < info->frames_len; ++i) {
+         if (info->frames[i].data)
+            STBI_FREE(info->frames[i].data);
+      }
+      STBI_FREE(info->frames);
+      info->frames = NULL;
+   }
+   if (info->default_data) {
+      STBI_FREE(info->default_data);
+      info->default_data = NULL;
+   }
+   info->frames_len = 0;
+   info->frames_cap = 0;
+   info->default_len = 0;
+   info->default_cap = 0;
+}
+
+static int stbi__apng_append(stbi_uc **pbuf, stbi__uint32 *plen, stbi__uint32 *pcap, stbi__context *s, stbi__uint32 len)
+{
+   stbi_uc *p;
+   stbi__uint32 newcap;
+   if (len == 0)
+      return 1;
+   if (len > STBI__APNG_MAX_CHUNK)
+      return stbi__err("IDAT size limit", "APNG chunk larger than 2^30 bytes");
+   if (*plen + len < *plen)
+      return stbi__err("too large", "APNG data too large");
+   if (*plen + len > (stbi__uint32)INT_MAX)
+      return stbi__err("too large", "APNG data too large");
+   if (*plen + len > *pcap) {
+      stbi__uint32 oldcap;
+      if (*pcap == 0)
+         newcap = len > 4096 ? len : 4096;
+      else
+         newcap = *pcap;
+      while (*plen + len > newcap) {
+         if (newcap > (stbi__uint32)INT_MAX / 2)
+            return stbi__err("outofmem", "Out of memory");
+         newcap *= 2;
+      }
+      oldcap = *pcap;
+      STBI_NOTUSED(oldcap);
+      p = (stbi_uc *)STBI_REALLOC_SIZED(*pbuf, *pcap, newcap);
+      if (p == NULL)
+         return stbi__err("outofmem", "Out of memory");
+      *pbuf = p;
+      *pcap = newcap;
+   }
+   if (!stbi__getn(s, *pbuf + *plen, (int)len))
+      return stbi__err("outofdata", "Corrupt PNG");
+   *plen += len;
+   return 1;
+}
+
+static int stbi__apng_parse(stbi__context *s, stbi__apng_info *info)
+{
+   int first;
+   int color;
+   int interlace;
+   int is_iphone;
+   int seen_idat;
+   int seen_fdat;
+   stbi__uint32 expected_seq;
+   stbi__uint32 i;
+   int k;
+   stbi_uc pal_img_n;
+   stbi_uc has_trans;
+   stbi_uc tc[3];
+   stbi__uint16 tc16[3];
+   stbi__uint32 pal_len;
+   stbi_uc palette[1024];
+   stbi__uint32 canvas_w, canvas_h;
+   int depth;
+   int base_img_n;
+
+   first = 1;
+   color = 0;
+   interlace = 0;
+   is_iphone = 0;
+   seen_idat = 0;
+   seen_fdat = 0;
+   expected_seq = 0;
+   pal_img_n = 0;
+   has_trans = 0;
+   pal_len = 0;
+   canvas_w = 0;
+   canvas_h = 0;
+   depth = 0;
+   base_img_n = 0;
+   tc[0] = 0; tc[1] = 0; tc[2] = 0;
+   tc16[0] = 0; tc16[1] = 0; tc16[2] = 0;
+   memset(palette, 0, sizeof(palette));
+   memset(info, 0, sizeof(*info));
+
+   if (!stbi__check_png_header(s))
+      return 0;
+
+   for (;;) {
+      stbi__pngchunk c;
+      c = stbi__get_chunk_header(s);
+      if (c.length > (stbi__uint32)INT_MAX)
+         return stbi__err("too large", "Corrupt PNG");
+      switch (c.type) {
+         case STBI__PNG_TYPE('C','g','B','I'):
+            is_iphone = 1;
+            stbi__skip(s, (int)c.length);
+            break;
+         case STBI__PNG_TYPE('I','H','D','R'): {
+            int comp, filter;
+            if (!first)
+               return stbi__err("multiple IHDR", "Corrupt PNG");
+            first = 0;
+            if (c.length != 13)
+               return stbi__err("bad IHDR len", "Corrupt PNG");
+            canvas_w = stbi__get32be(s);
+            canvas_h = stbi__get32be(s);
+            if (canvas_w > STBI_MAX_DIMENSIONS)
+               return stbi__err("too large", "Very large image (corrupt?)");
+            if (canvas_h > STBI_MAX_DIMENSIONS)
+               return stbi__err("too large", "Very large image (corrupt?)");
+            depth = stbi__get8(s);
+            if (depth != 1 && depth != 2 && depth != 4 && depth != 8 && depth != 16)
+               return stbi__err("1/2/4/8/16-bit only", "PNG not supported: 1/2/4/8/16-bit only");
+            color = stbi__get8(s);
+            if (color > 6)
+               return stbi__err("bad ctype", "Corrupt PNG");
+            if (color == 3 && depth == 16)
+               return stbi__err("bad ctype", "Corrupt PNG");
+            if (color == 3)
+               pal_img_n = 3;
+            else if (color & 1)
+               return stbi__err("bad ctype", "Corrupt PNG");
+            comp = stbi__get8(s);
+            if (comp)
+               return stbi__err("bad comp method", "Corrupt PNG");
+            filter = stbi__get8(s);
+            if (filter)
+               return stbi__err("bad filter method", "Corrupt PNG");
+            interlace = stbi__get8(s);
+            if (interlace > 1)
+               return stbi__err("bad interlace method", "Corrupt PNG");
+            if (!canvas_w || !canvas_h)
+               return stbi__err("0-pixel image", "Corrupt PNG");
+            if (!pal_img_n) {
+               base_img_n = (color & 2 ? 3 : 1) + (color & 4 ? 1 : 0);
+               if ((1 << 30) / canvas_w / (stbi__uint32)base_img_n < canvas_h)
+                  return stbi__err("too large", "Image too large to decode");
+            } else {
+               base_img_n = 1;
+               if ((1 << 30) / canvas_w / 4 < canvas_h)
+                  return stbi__err("too large", "Corrupt PNG");
+            }
+            break;
+         }
+         case STBI__PNG_TYPE('P','L','T','E'): {
+            if (first)
+               return stbi__err("first not IHDR", "Corrupt PNG");
+            if (c.length > 256*3)
+               return stbi__err("invalid PLTE", "Corrupt PNG");
+            pal_len = c.length / 3;
+            if (pal_len * 3 != c.length)
+               return stbi__err("invalid PLTE", "Corrupt PNG");
+            for (i = 0; i < pal_len; ++i) {
+               palette[i*4+0] = stbi__get8(s);
+               palette[i*4+1] = stbi__get8(s);
+               palette[i*4+2] = stbi__get8(s);
+               palette[i*4+3] = 255;
+            }
+            break;
+         }
+         case STBI__PNG_TYPE('t','R','N','S'): {
+            if (first)
+               return stbi__err("first not IHDR", "Corrupt PNG");
+            if (seen_idat || seen_fdat)
+               return stbi__err("tRNS after IDAT", "Corrupt PNG");
+            if (pal_img_n) {
+               if (pal_len == 0)
+                  return stbi__err("tRNS before PLTE", "Corrupt PNG");
+               if (c.length > pal_len)
+                  return stbi__err("bad tRNS len", "Corrupt PNG");
+               pal_img_n = 4;
+               for (i = 0; i < c.length; ++i)
+                  palette[i*4+3] = stbi__get8(s);
+            } else {
+               if (!(base_img_n & 1))
+                  return stbi__err("tRNS with alpha", "Corrupt PNG");
+               if (c.length != (stbi__uint32)base_img_n*2)
+                  return stbi__err("bad tRNS len", "Corrupt PNG");
+               has_trans = 1;
+               if (depth == 16) {
+                  for (k = 0; k < base_img_n && k < 3; ++k)
+                     tc16[k] = (stbi__uint16)stbi__get16be(s);
+               } else {
+                  for (k = 0; k < base_img_n && k < 3; ++k)
+                     tc[k] = (stbi_uc)(stbi__get16be(s) & 255) * stbi__depth_scale_table[depth];
+               }
+            }
+            break;
+         }
+         case STBI__PNG_TYPE('a','c','T','L'): {
+            stbi__uint32 nf, np;
+            if (first)
+               return stbi__err("first not IHDR", "Corrupt PNG");
+            if (info->has_actl)
+               return stbi__err("multiple acTL", "Corrupt PNG");
+            if (seen_idat || seen_fdat)
+               return stbi__err("acTL after IDAT", "Corrupt PNG");
+            if (c.length != 8)
+               return stbi__err("bad acTL len", "Corrupt PNG");
+            nf = stbi__get32be(s);
+            np = stbi__get32be(s);
+            if (nf == 0 || nf > STBI__APNG_MAX_FRAMES)
+               return stbi__err("bad num_frames", "Corrupt PNG");
+            info->has_actl = 1;
+            info->num_frames_actl = nf;
+            info->num_plays = np;
+            break;
+         }
+         case STBI__PNG_TYPE('f','c','T','L'): {
+            stbi__uint32 seq, w, h, xoff, yoff;
+            int dnum, dden;
+            int dispose_op, blend_op;
+            stbi__apng_frame_raw *nf;
+            stbi__uint32 newcap;
+            if (first)
+               return stbi__err("first not IHDR", "Corrupt PNG");
+            if (!info->has_actl)
+               return stbi__err("fcTL without acTL", "Corrupt PNG");
+            if (c.length != 26)
+               return stbi__err("bad fcTL len", "Corrupt PNG");
+            if (info->frames_len >= STBI__APNG_MAX_FRAMES)
+               return stbi__err("too many frames", "Corrupt PNG");
+            if (!seen_idat && info->frames_len > 0)
+               return stbi__err("multiple fcTL before IDAT", "Corrupt PNG");
+            seq = stbi__get32be(s);
+            w = stbi__get32be(s);
+            h = stbi__get32be(s);
+            xoff = stbi__get32be(s);
+            yoff = stbi__get32be(s);
+            dnum = stbi__get16be(s);
+            dden = stbi__get16be(s);
+            dispose_op = stbi__get8(s);
+            blend_op = stbi__get8(s);
+            if (seq != expected_seq)
+               return stbi__err("bad sequence", "Corrupt PNG");
+            expected_seq++;
+            if (w == 0 || h == 0)
+               return stbi__err("bad frame size", "Corrupt PNG");
+            if (w > canvas_w || h > canvas_h)
+               return stbi__err("frame too large", "Corrupt PNG");
+            if (xoff + w < xoff || yoff + h < yoff)
+               return stbi__err("bad frame offset", "Corrupt PNG");
+            if (xoff + w > canvas_w || yoff + h > canvas_h)
+               return stbi__err("frame outside canvas", "Corrupt PNG");
+            if (dispose_op > 2)
+               return stbi__err("bad dispose_op", "Corrupt PNG");
+            if (blend_op > 1)
+               return stbi__err("bad blend_op", "Corrupt PNG");
+            if (info->frames_len >= info->frames_cap) {
+               stbi__uint32 newcapbytes;
+               if (info->frames_cap == 0)
+                  newcap = 4;
+               else
+                  newcap = info->frames_cap * 2;
+               if (newcap > STBI__APNG_MAX_FRAMES)
+                  newcap = STBI__APNG_MAX_FRAMES;
+               if (newcap <= info->frames_cap)
+                  return stbi__err("outofmem", "Out of memory");
+               newcapbytes = newcap * (stbi__uint32)sizeof(stbi__apng_frame_raw);
+               nf = (stbi__apng_frame_raw *)STBI_REALLOC_SIZED(info->frames, info->frames_cap * (stbi__uint32)sizeof(stbi__apng_frame_raw), newcapbytes);
+               if (nf == NULL)
+                  return stbi__err("outofmem", "Out of memory");
+               info->frames = nf;
+               info->frames_cap = newcap;
+            }
+            info->frames[info->frames_len].w = w;
+            info->frames[info->frames_len].h = h;
+            info->frames[info->frames_len].xoff = xoff;
+            info->frames[info->frames_len].yoff = yoff;
+            info->frames[info->frames_len].delay_num = (stbi__uint16)dnum;
+            info->frames[info->frames_len].delay_den = (stbi__uint16)dden;
+            info->frames[info->frames_len].dispose_op = (stbi_uc)dispose_op;
+            info->frames[info->frames_len].blend_op = (stbi_uc)blend_op;
+            info->frames[info->frames_len].data = NULL;
+            info->frames[info->frames_len].data_len = 0;
+            info->frames[info->frames_len].data_cap = 0;
+            info->frames_len++;
+            break;
+         }
+         case STBI__PNG_TYPE('I','D','A','T'): {
+            if (first)
+               return stbi__err("first not IHDR", "Corrupt PNG");
+            if (pal_img_n && !pal_len)
+               return stbi__err("no PLTE", "Corrupt PNG");
+            if (seen_fdat)
+               return stbi__err("IDAT after fdAT", "Corrupt PNG");
+            if (!stbi__apng_append(&info->default_data, &info->default_len, &info->default_cap, s, c.length))
+               return 0;
+            seen_idat = 1;
+            if (info->has_actl && info->frames_len == 1 && !info->default_is_first)
+               info->default_is_first = 1;
+            break;
+         }
+         case STBI__PNG_TYPE('f','d','A','T'): {
+            stbi__uint32 seq;
+            stbi__uint32 datalen;
+            if (first)
+               return stbi__err("first not IHDR", "Corrupt PNG");
+            if (!info->has_actl)
+               return stbi__err("fdAT without acTL", "Corrupt PNG");
+            if (!seen_idat)
+               return stbi__err("fdAT before IDAT", "Corrupt PNG");
+            if (info->frames_len == 0)
+               return stbi__err("fdAT without fcTL", "Corrupt PNG");
+            if (c.length < 4)
+               return stbi__err("bad fdAT len", "Corrupt PNG");
+            seq = stbi__get32be(s);
+            if (seq != expected_seq)
+               return stbi__err("bad sequence", "Corrupt PNG");
+            expected_seq++;
+            datalen = c.length - 4;
+            if (!stbi__apng_append(&info->frames[info->frames_len-1].data, &info->frames[info->frames_len-1].data_len, &info->frames[info->frames_len-1].data_cap, s, datalen))
+               return 0;
+            seen_fdat = 1;
+            break;
+         }
+         case STBI__PNG_TYPE('I','E','N','D'): {
+            stbi__uint32 fi;
+            if (first)
+               return stbi__err("first not IHDR", "Corrupt PNG");
+            if (info->default_data == NULL)
+               return stbi__err("no IDAT", "Corrupt PNG");
+            if (info->has_actl) {
+               if (info->frames_len != info->num_frames_actl)
+                  return stbi__err("frame count mismatch", "Corrupt PNG");
+               for (fi = 0; fi < info->frames_len; ++fi) {
+                  if (fi == 0 && info->default_is_first)
+                     continue;
+                  if (info->frames[fi].data_len == 0)
+                     return stbi__err("missing frame data", "Corrupt PNG");
+               }
+            } else {
+               if (info->frames_len != 0)
+                  return stbi__err("fcTL without acTL", "Corrupt PNG");
+            }
+            info->canvas_w = canvas_w;
+            info->canvas_h = canvas_h;
+            info->depth = depth;
+            info->color = color;
+            info->interlace = interlace;
+            info->base_img_n = base_img_n;
+            memcpy(info->palette, palette, sizeof(palette));
+            info->pal_len = pal_len;
+            info->pal_img_n = pal_img_n;
+            info->has_trans = has_trans;
+            info->tc[0] = tc[0]; info->tc[1] = tc[1]; info->tc[2] = tc[2];
+            info->tc16[0] = tc16[0]; info->tc16[1] = tc16[1]; info->tc16[2] = tc16[2];
+            info->is_iphone = is_iphone;
+            stbi__get32be(s);
+            return 1;
+         }
+         default: {
+            if (first)
+               return stbi__err("first not IHDR", "Corrupt PNG");
+            if ((c.type & (1 << 29)) == 0) {
+               #ifndef STBI_NO_FAILURE_STRINGS
+               static char invalid_chunk[] = "XXXX PNG chunk not known";
+               invalid_chunk[0] = STBI__BYTECAST(c.type >> 24);
+               invalid_chunk[1] = STBI__BYTECAST(c.type >> 16);
+               invalid_chunk[2] = STBI__BYTECAST(c.type >>  8);
+               invalid_chunk[3] = STBI__BYTECAST(c.type >>  0);
+               #endif
+               return stbi__err(invalid_chunk, "PNG not supported: unknown PNG chunk type");
+            }
+            stbi__skip(s, (int)c.length);
+            break;
+         }
+      }
+      stbi__get32be(s);
+   }
+}
+
+static stbi_uc *stbi__apng_decode_to_rgba8(stbi__apng_info *info, stbi__uint32 idx, stbi__uint32 *out_fw, stbi__uint32 *out_fh)
+{
+   stbi_uc *zdata;
+   stbi__uint32 zlen;
+   stbi__uint32 fw, fh;
+   stbi__uint32 bpl, raw_len;
+   stbi_uc *expanded;
+   int raw_len_int;
+   stbi__context dummy;
+   stbi__png tmp;
+   int out_n;
+   void *native;
+   int final_n;
+   stbi_uc *rgba;
+
+   if (!info->has_actl) {
+      fw = info->canvas_w;
+      fh = info->canvas_h;
+      zdata = info->default_data;
+      zlen = info->default_len;
+   } else if (idx == 0 && info->default_is_first) {
+      fw = info->frames[0].w;
+      fh = info->frames[0].h;
+      zdata = info->default_data;
+      zlen = info->default_len;
+   } else {
+      fw = info->frames[idx].w;
+      fh = info->frames[idx].h;
+      zdata = info->frames[idx].data;
+      zlen = info->frames[idx].data_len;
+   }
+   if (fw == 0 || fh == 0)
+      return stbi__errpuc("bad frame size", "Corrupt PNG");
+   if (zdata == NULL || zlen == 0)
+      return stbi__errpuc("missing frame data", "Corrupt PNG");
+   if (zlen > (stbi__uint32)INT_MAX)
+      return stbi__errpuc("too large", "Corrupt PNG");
+   if ((stbi__uint32)(1 << 30) / fw / (stbi__uint32)info->base_img_n < fh)
+      return stbi__errpuc("too large", "Image too large to decode");
+   bpl = (fw * (stbi__uint32)info->depth + 7) / 8;
+   raw_len = bpl * fh * (stbi__uint32)info->base_img_n + fh;
+   expanded = (stbi_uc *)stbi_zlib_decode_malloc_guesssize_headerflag((char *)zdata, (int)zlen, (int)raw_len, &raw_len_int, !info->is_iphone);
+   if (expanded == NULL)
+      return NULL;
+   raw_len = (stbi__uint32)raw_len_int;
+   memset(&dummy, 0, sizeof(dummy));
+   dummy.img_x = fw;
+   dummy.img_y = fh;
+   dummy.img_n = info->base_img_n;
+   dummy.img_out_n = info->base_img_n;
+   memset(&tmp, 0, sizeof(tmp));
+   tmp.s = &dummy;
+   tmp.depth = info->depth;
+   if (info->pal_img_n)
+      out_n = 1;
+   else if (info->has_trans)
+      out_n = info->base_img_n + 1;
+   else
+      out_n = info->base_img_n;
+   dummy.img_out_n = out_n;
+   if (!stbi__create_png_image(&tmp, expanded, raw_len, out_n, info->depth, info->color, info->interlace)) {
+      STBI_FREE(expanded);
+      STBI_FREE(tmp.out);
+      return NULL;
+   }
+   STBI_FREE(expanded);
+   expanded = NULL;
+   if (info->has_trans) {
+      if (info->depth == 16) {
+         if (!stbi__compute_transparency16(&tmp, info->tc16, out_n)) {
+            STBI_FREE(tmp.out);
+            return NULL;
+         }
+      } else {
+         if (!stbi__compute_transparency(&tmp, info->tc, out_n)) {
+            STBI_FREE(tmp.out);
+            return NULL;
+         }
+      }
+   }
+   if (info->pal_img_n) {
+      dummy.img_n = info->pal_img_n;
+      dummy.img_out_n = info->pal_img_n;
+      if (!stbi__expand_png_palette(&tmp, info->palette, (int)info->pal_len, info->pal_img_n)) {
+         STBI_FREE(tmp.out);
+         return NULL;
+      }
+      native = tmp.out;
+      final_n = info->pal_img_n;
+   } else {
+      native = tmp.out;
+      final_n = out_n;
+      if (info->has_trans)
+         dummy.img_n = final_n;
+   }
+   tmp.out = NULL;
+   if (info->depth == 16) {
+      stbi__uint16 *n16;
+      stbi__uint16 *rgba16;
+      n16 = (stbi__uint16 *)native;
+      if (final_n != 4) {
+         rgba16 = stbi__convert_format16(n16, final_n, 4, fw, fh);
+         if (rgba16 == NULL)
+            return NULL;
+      } else {
+         rgba16 = n16;
+      }
+      rgba = stbi__convert_16_to_8(rgba16, (int)fw, (int)fh, 4);
+      if (rgba == NULL)
+         return NULL;
+   } else {
+      stbi_uc *n8;
+      n8 = (stbi_uc *)native;
+      if (final_n != 4) {
+         rgba = stbi__convert_format(n8, final_n, 4, fw, fh);
+         if (rgba == NULL)
+            return NULL;
+      } else {
+         rgba = n8;
+      }
+   }
+   *out_fw = fw;
+   *out_fh = fh;
+   return rgba;
+}
+
+static void stbi__apng_blend_rect(stbi_uc *canvas, stbi__uint32 cw, stbi__uint32 ch, stbi_uc *patch, stbi__uint32 fw, stbi__uint32 fh, stbi__uint32 xoff, stbi__uint32 yoff, int blend)
+{
+   stbi__uint32 y, x;
+   if (xoff >= cw || yoff >= ch)
+      return;
+   if (fw > cw - xoff)
+      fw = cw - xoff;
+   if (fh > ch - yoff)
+      fh = ch - yoff;
+   for (y = 0; y < fh; ++y) {
+      stbi_uc *dst;
+      stbi_uc *src;
+      dst = canvas + ((yoff + y) * cw + xoff) * 4;
+      src = patch + y * fw * 4;
+      if (blend == STBI_APNG_BLEND_SOURCE) {
+         memcpy(dst, src, fw * 4);
+      } else {
+         for (x = 0; x < fw; ++x) {
+            int sa;
+            sa = src[3];
+            if (sa == 255) {
+               dst[0] = src[0]; dst[1] = src[1]; dst[2] = src[2]; dst[3] = 255;
+            } else if (sa != 0) {
+               int da;
+               int outa;
+               int sr, sg, sb, dr, dg, db, inv;
+               da = dst[3];
+               outa = sa + ((da * (255 - sa) + 127) / 255);
+               if (outa == 0) {
+                  dst[0] = 0; dst[1] = 0; dst[2] = 0; dst[3] = 0;
+               } else {
+                  sr = src[0]; sg = src[1]; sb = src[2];
+                  dr = dst[0]; dg = dst[1]; db = dst[2];
+                  inv = 255 - sa;
+                  dst[0] = (stbi_uc)((sr * sa + ((dr * da * inv + 127) / 255) + outa / 2) / outa);
+                  dst[1] = (stbi_uc)((sg * sa + ((dg * da * inv + 127) / 255) + outa / 2) / outa);
+                  dst[2] = (stbi_uc)((sb * sa + ((db * da * inv + 127) / 255) + outa / 2) / outa);
+                  dst[3] = (stbi_uc)outa;
+               }
+            }
+            src += 4;
+            dst += 4;
+         }
+      }
+   }
+}
+
+static void stbi__apng_clear_rect(stbi_uc *canvas, stbi__uint32 cw, stbi__uint32 ch, stbi__uint32 w, stbi__uint32 h, stbi__uint32 xoff, stbi__uint32 yoff)
+{
+   stbi__uint32 y;
+   if (xoff >= cw || yoff >= ch)
+      return;
+   if (w > cw - xoff)
+      w = cw - xoff;
+   if (h > ch - yoff)
+      h = ch - yoff;
+   for (y = 0; y < h; ++y) {
+      memset(canvas + ((yoff + y) * cw + xoff) * 4, 0, w * 4);
+   }
+}
+
+static stbi_uc *stbi__apng_load_frame_main(stbi__context *s, int idx, int *x, int *y, int *comp, int req_comp)
+{
+   stbi__apng_info info;
+   stbi__uint32 i;
+   stbi__uint32 cw, ch;
+   stbi_uc *canvas;
+   stbi_uc *prev;
+   int need_prev;
+   int out_channels;
+
+   if (req_comp < 0 || req_comp > 4)
+      return stbi__errpuc("bad req_comp", "Internal error");
+   memset(&info, 0, sizeof(info));
+   if (!stbi__apng_parse(s, &info)) {
+      stbi__apng_free_info(&info);
+      return NULL;
+   }
+   if (!info.has_actl) {
+      if (idx != 0) {
+         stbi__apng_free_info(&info);
+         return stbi__errpuc("bad frame index", "APNG frame index out of range");
+      }
+   } else {
+      if (idx < 0 || (stbi__uint32)idx >= info.frames_len) {
+         stbi__apng_free_info(&info);
+         return stbi__errpuc("bad frame index", "APNG frame index out of range");
+      }
+   }
+   cw = info.canvas_w;
+   ch = info.canvas_h;
+   if (!stbi__mad3sizes_valid((int)cw, (int)ch, 4, 0)) {
+      stbi__apng_free_info(&info);
+      return stbi__errpuc("too large", "Image too large to decode");
+   }
+   canvas = (stbi_uc *)stbi__malloc(cw * ch * 4);
+   if (canvas == NULL) {
+      stbi__apng_free_info(&info);
+      return stbi__errpuc("outofmem", "Out of memory");
+   }
+   memset(canvas, 0, cw * ch * 4);
+   need_prev = 0;
+   if (info.has_actl) {
+      for (i = 0; (int)i <= idx; ++i) {
+         if (info.frames[i].dispose_op == STBI_APNG_DISPOSE_PREVIOUS && (int)i < idx) {
+            need_prev = 1;
+            break;
+         }
+      }
+   }
+   prev = NULL;
+   if (need_prev) {
+      prev = (stbi_uc *)stbi__malloc(cw * ch * 4);
+      if (prev == NULL) {
+         STBI_FREE(canvas);
+         stbi__apng_free_info(&info);
+         return stbi__errpuc("outofmem", "Out of memory");
+      }
+   }
+   for (i = 0; (int)i <= idx; ++i) {
+      stbi__uint32 fw, fh;
+      stbi_uc *patch;
+      stbi__uint32 fx, fy;
+      int fblend, fdispose;
+      if (!info.has_actl) {
+         fx = 0; fy = 0;
+         fblend = STBI_APNG_BLEND_SOURCE;
+         fdispose = STBI_APNG_DISPOSE_NONE;
+      } else {
+         fx = info.frames[i].xoff;
+         fy = info.frames[i].yoff;
+         fblend = info.frames[i].blend_op;
+         fdispose = info.frames[i].dispose_op;
+         if (i == 0)
+            fblend = STBI_APNG_BLEND_SOURCE;
+      }
+      patch = stbi__apng_decode_to_rgba8(&info, i, &fw, &fh);
+      if (patch == NULL) {
+         STBI_FREE(canvas);
+         if (prev)
+            STBI_FREE(prev);
+         stbi__apng_free_info(&info);
+         return NULL;
+      }
+      if ((int)i < idx && fdispose == STBI_APNG_DISPOSE_PREVIOUS && prev)
+         memcpy(prev, canvas, cw * ch * 4);
+      stbi__apng_blend_rect(canvas, cw, ch, patch, fw, fh, fx, fy, fblend);
+      STBI_FREE(patch);
+      if ((int)i < idx) {
+         if (fdispose == STBI_APNG_DISPOSE_BACKGROUND)
+            stbi__apng_clear_rect(canvas, cw, ch, fw, fh, fx, fy);
+         else if (fdispose == STBI_APNG_DISPOSE_PREVIOUS && prev)
+            memcpy(canvas, prev, cw * ch * 4);
+      }
+   }
+   if (prev)
+      STBI_FREE(prev);
+   out_channels = 4;
+   if (req_comp && req_comp != 4) {
+      stbi_uc *conv;
+      conv = stbi__convert_format(canvas, 4, req_comp, cw, ch);
+      if (conv == NULL) {
+         stbi__apng_free_info(&info);
+         return NULL;
+      }
+      canvas = conv;
+      out_channels = req_comp;
+   }
+   *x = (int)cw;
+   *y = (int)ch;
+   if (comp)
+      *comp = 4;
+   if (stbi__vertically_flip_on_load)
+      stbi__vertical_flip(canvas, (int)cw, (int)ch, out_channels);
+   stbi__apng_free_info(&info);
+   return canvas;
+}
+
+static int stbi__apng_count_main(stbi__context *s, int *x, int *y, int *frames, int *plays)
+{
+   stbi__apng_info info;
+   memset(&info, 0, sizeof(info));
+   if (!stbi__apng_parse(s, &info)) {
+      stbi__apng_free_info(&info);
+      return 0;
+   }
+   if (x) *x = (int)info.canvas_w;
+   if (y) *y = (int)info.canvas_h;
+   if (frames) *frames = info.has_actl ? (int)info.frames_len : 1;
+   if (plays) *plays = info.has_actl ? (int)info.num_plays : 0;
+   stbi__apng_free_info(&info);
+   return 1;
+}
+
+static int stbi__apng_frame_info_main(stbi__context *s, int idx, stbi_apng_frame_info *out)
+{
+   stbi__apng_info info;
+   memset(&info, 0, sizeof(info));
+   if (!stbi__apng_parse(s, &info)) {
+      stbi__apng_free_info(&info);
+      return 0;
+   }
+   if (!info.has_actl) {
+      if (idx != 0) {
+         stbi__apng_free_info(&info);
+         return stbi__err("bad frame index", "APNG frame index out of range");
+      }
+      if (out) {
+         out->width = info.canvas_w;
+         out->height = info.canvas_h;
+         out->x_offset = 0;
+         out->y_offset = 0;
+         out->delay_num = 0;
+         out->delay_den = 0;
+         out->dispose_op = STBI_APNG_DISPOSE_NONE;
+         out->blend_op = STBI_APNG_BLEND_SOURCE;
+      }
+      stbi__apng_free_info(&info);
+      return 1;
+   }
+   if (idx < 0 || (stbi__uint32)idx >= info.frames_len) {
+      stbi__apng_free_info(&info);
+      return stbi__err("bad frame index", "APNG frame index out of range");
+   }
+   if (out) {
+      out->width = info.frames[idx].w;
+      out->height = info.frames[idx].h;
+      out->x_offset = info.frames[idx].xoff;
+      out->y_offset = info.frames[idx].yoff;
+      out->delay_num = info.frames[idx].delay_num;
+      out->delay_den = info.frames[idx].delay_den;
+      out->dispose_op = info.frames[idx].dispose_op;
+      out->blend_op = info.frames[idx].blend_op;
+   }
+   stbi__apng_free_info(&info);
+   return 1;
+}
+
+static int stbi__apng_is_apng_main(stbi__context *s)
+{
+   stbi__apng_info info;
+   int r;
+   memset(&info, 0, sizeof(info));
+   if (!stbi__apng_parse(s, &info)) {
+      stbi__apng_free_info(&info);
+      return 0;
+   }
+   r = info.has_actl;
+   stbi__apng_free_info(&info);
+   return r;
+}
+
+STBIDEF int stbi_is_apng_from_memory(stbi_uc const *buffer, int len)
+{
+   stbi__context s;
+   stbi__start_mem(&s, buffer, len);
+   return stbi__apng_is_apng_main(&s);
+}
+
+STBIDEF int stbi_is_apng_from_callbacks(stbi_io_callbacks const *clbk, void *user)
+{
+   stbi__context s;
+   stbi__start_callbacks(&s, (stbi_io_callbacks *)clbk, user);
+   return stbi__apng_is_apng_main(&s);
+}
+
+STBIDEF int stbi_apng_count_from_memory(stbi_uc const *buffer, int len, int *x, int *y, int *frames, int *plays)
+{
+   stbi__context s;
+   stbi__start_mem(&s, buffer, len);
+   return stbi__apng_count_main(&s, x, y, frames, plays);
+}
+
+STBIDEF int stbi_apng_count_from_callbacks(stbi_io_callbacks const *clbk, void *user, int *x, int *y, int *frames, int *plays)
+{
+   stbi__context s;
+   stbi__start_callbacks(&s, (stbi_io_callbacks *)clbk, user);
+   return stbi__apng_count_main(&s, x, y, frames, plays);
+}
+
+STBIDEF int stbi_apng_get_frame_info_from_memory(stbi_uc const *buffer, int len, int frame_index, stbi_apng_frame_info *info)
+{
+   stbi__context s;
+   stbi__start_mem(&s, buffer, len);
+   return stbi__apng_frame_info_main(&s, frame_index, info);
+}
+
+STBIDEF int stbi_apng_get_frame_info_from_callbacks(stbi_io_callbacks const *clbk, void *user, int frame_index, stbi_apng_frame_info *info)
+{
+   stbi__context s;
+   stbi__start_callbacks(&s, (stbi_io_callbacks *)clbk, user);
+   return stbi__apng_frame_info_main(&s, frame_index, info);
+}
+
+STBIDEF stbi_uc *stbi_load_apng_frame_from_memory(stbi_uc const *buffer, int len, int frame_index, int *x, int *y, int *comp, int req_comp)
+{
+   stbi__context s;
+   stbi__start_mem(&s, buffer, len);
+   return stbi__apng_load_frame_main(&s, frame_index, x, y, comp, req_comp);
+}
+
+STBIDEF stbi_uc *stbi_load_apng_frame_from_callbacks(stbi_io_callbacks const *clbk, void *user, int frame_index, int *x, int *y, int *comp, int req_comp)
+{
+   stbi__context s;
+   stbi__start_callbacks(&s, (stbi_io_callbacks *)clbk, user);
+   return stbi__apng_load_frame_main(&s, frame_index, x, y, comp, req_comp);
+}
+
+#ifndef STBI_NO_STDIO
+STBIDEF int stbi_is_apng(char const *filename)
+{
+   FILE *f;
+   int r;
+   f = stbi__fopen(filename, "rb");
+   if (!f)
+      return 0;
+   r = stbi_is_apng_from_file(f);
+   fclose(f);
+   return r;
+}
+
+STBIDEF int stbi_is_apng_from_file(FILE *f)
+{
+   stbi__context s;
+   long pos;
+   int r;
+   pos = ftell(f);
+   stbi__start_file(&s, f);
+   r = stbi__apng_is_apng_main(&s);
+   fseek(f, pos, SEEK_SET);
+   return r;
+}
+
+STBIDEF int stbi_apng_count(char const *filename, int *x, int *y, int *frames, int *plays)
+{
+   FILE *f;
+   int r;
+   f = stbi__fopen(filename, "rb");
+   if (!f)
+      return 0;
+   r = stbi_apng_count_from_file(f, x, y, frames, plays);
+   fclose(f);
+   return r;
+}
+
+STBIDEF int stbi_apng_count_from_file(FILE *f, int *x, int *y, int *frames, int *plays)
+{
+   stbi__context s;
+   long pos;
+   int r;
+   pos = ftell(f);
+   stbi__start_file(&s, f);
+   r = stbi__apng_count_main(&s, x, y, frames, plays);
+   fseek(f, pos, SEEK_SET);
+   return r;
+}
+
+STBIDEF int stbi_apng_get_frame_info(char const *filename, int frame_index, stbi_apng_frame_info *info)
+{
+   FILE *f;
+   int r;
+   f = stbi__fopen(filename, "rb");
+   if (!f)
+      return 0;
+   r = stbi_apng_get_frame_info_from_file(f, frame_index, info);
+   fclose(f);
+   return r;
+}
+
+STBIDEF int stbi_apng_get_frame_info_from_file(FILE *f, int frame_index, stbi_apng_frame_info *info)
+{
+   stbi__context s;
+   long pos;
+   int r;
+   pos = ftell(f);
+   stbi__start_file(&s, f);
+   r = stbi__apng_frame_info_main(&s, frame_index, info);
+   fseek(f, pos, SEEK_SET);
+   return r;
+}
+
+STBIDEF stbi_uc *stbi_load_apng_frame(char const *filename, int frame_index, int *x, int *y, int *comp, int req_comp)
+{
+   FILE *f;
+   stbi_uc *r;
+   f = stbi__fopen(filename, "rb");
+   if (!f)
+      return stbi__errpuc("can't fopen", "Unable to open file");
+   r = stbi_load_apng_frame_from_file(f, frame_index, x, y, comp, req_comp);
+   fclose(f);
+   return r;
+}
+
+STBIDEF stbi_uc *stbi_load_apng_frame_from_file(FILE *f, int frame_index, int *x, int *y, int *comp, int req_comp)
+{
+   stbi__context s;
+   stbi__start_file(&s, f);
+   return stbi__apng_load_frame_main(&s, frame_index, x, y, comp, req_comp);
+}
+#endif
 #endif
 
 // Microsoft/Windows BMP image

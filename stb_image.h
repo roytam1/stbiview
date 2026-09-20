@@ -431,6 +431,26 @@ STBIDEF stbi_uc *stbi_load_from_file  (FILE *f, int *x, int *y, int *channels_in
 
 #ifndef STBI_NO_GIF
 STBIDEF stbi_uc *stbi_load_gif_from_memory(stbi_uc const *buffer, int len, int **delays, int *x, int *y, int *z, int *comp, int req_comp);
+typedef struct
+{
+   int delay;
+   int x_offset, y_offset, width, height;
+   int dispose_op;
+} stbi_gif_frame_info;
+STBIDEF int stbi_gif_count_from_memory(stbi_uc const *buffer, int len, int *x, int *y, int *frames);
+STBIDEF int stbi_gif_count_from_callbacks(stbi_io_callbacks const *clbk, void *user, int *x, int *y, int *frames);
+STBIDEF int stbi_gif_get_frame_info_from_memory(stbi_uc const *buffer, int len, int frame_index, stbi_gif_frame_info *info);
+STBIDEF int stbi_gif_get_frame_info_from_callbacks(stbi_io_callbacks const *clbk, void *user, int frame_index, stbi_gif_frame_info *info);
+STBIDEF stbi_uc *stbi_load_gif_frame_from_memory(stbi_uc const *buffer, int len, int frame_index, int *delay, int *x, int *y, int *comp, int req_comp);
+STBIDEF stbi_uc *stbi_load_gif_frame_from_callbacks(stbi_io_callbacks const *clbk, void *user, int frame_index, int *delay, int *x, int *y, int *comp, int req_comp);
+#ifndef STBI_NO_STDIO
+STBIDEF int stbi_gif_count(char const *filename, int *x, int *y, int *frames);
+STBIDEF int stbi_gif_count_from_file(FILE *f, int *x, int *y, int *frames);
+STBIDEF int stbi_gif_get_frame_info(char const *filename, int frame_index, stbi_gif_frame_info *info);
+STBIDEF int stbi_gif_get_frame_info_from_file(FILE *f, int frame_index, stbi_gif_frame_info *info);
+STBIDEF stbi_uc *stbi_load_gif_frame(char const *filename, int frame_index, int *delay, int *x, int *y, int *comp, int req_comp);
+STBIDEF stbi_uc *stbi_load_gif_frame_from_file(FILE *f, int frame_index, int *delay, int *x, int *y, int *comp, int req_comp);
+#endif
 #endif
 
 #ifndef STBI_NO_PNG
@@ -8065,6 +8085,293 @@ static int stbi__gif_info(stbi__context *s, int *x, int *y, int *comp)
 {
    return stbi__gif_info_raw(s,x,y,comp);
 }
+
+/* Indexed GIF frame-viewer extension (APNG-alike).
+   Bulk stbi_load_gif_from_memory keeps N*W*H*4; indexed keeps O(1).
+   Each page is a full-canvas composited RGBA image (converted to req_comp). */
+static void stbi__gif_free_state(stbi__gif *g)
+{
+   STBI_FREE(g->out);
+   g->out = NULL;
+   STBI_FREE(g->history);
+   g->history = NULL;
+   STBI_FREE(g->background);
+   g->background = NULL;
+}
+
+static int stbi__gif_count_main(stbi__context *s, int *x, int *y, int *frames)
+{
+   stbi__gif g;
+   stbi_uc *u;
+   int layers;
+   memset(&g, 0, sizeof(g));
+   if (!stbi__gif_test(s))
+      return 0;
+   layers = 0;
+   for (;;) {
+      u = stbi__gif_load_next(s, &g, NULL, 0, NULL);
+      if (u == (stbi_uc *)s) {
+         /* clean terminator */
+         break;
+      }
+      if (u == NULL) {
+         stbi__gif_free_state(&g);
+         return 0;
+      }
+      ++layers;
+   }
+   if (layers == 0) {
+      stbi__gif_free_state(&g);
+      return stbi__err("no frames", "Corrupt GIF");
+   }
+   if (x) *x = g.w;
+   if (y) *y = g.h;
+   if (frames) *frames = layers;
+   stbi__gif_free_state(&g);
+   return 1;
+}
+
+static int stbi__gif_info_main(stbi__context *s, int idx, stbi_gif_frame_info *out)
+{
+   stbi__gif g;
+   stbi_uc *u;
+   int i;
+   if (idx < 0)
+      return stbi__err("bad frame index", "GIF frame index out of range");
+   memset(&g, 0, sizeof(g));
+   if (!stbi__gif_test(s))
+      return 0;
+   for (i = 0; i <= idx; ++i) {
+      u = stbi__gif_load_next(s, &g, NULL, 0, NULL);
+      if (u == (stbi_uc *)s) {
+         stbi__gif_free_state(&g);
+         return stbi__err("bad frame index", "GIF frame index out of range");
+      }
+      if (u == NULL) {
+         stbi__gif_free_state(&g);
+         return 0;
+      }
+   }
+   if (out) {
+      out->delay = g.delay;
+      out->dispose_op = (g.eflags & 0x1C) >> 2;
+      if (g.line_size > 0) {
+         out->x_offset = g.start_x / 4;
+         out->y_offset = g.start_y / g.line_size;
+         out->width = (g.max_x - g.start_x) / 4;
+         out->height = (g.max_y - g.start_y) / g.line_size;
+      } else {
+         out->x_offset = 0;
+         out->y_offset = 0;
+         out->width = g.w;
+         out->height = g.h;
+      }
+   }
+   stbi__gif_free_state(&g);
+   return 1;
+}
+
+static stbi_uc *stbi__gif_load_frame_main(stbi__context *s, int idx, int *delay, int *x, int *y, int *comp, int req_comp)
+{
+   stbi__gif g;
+   stbi_uc *u;
+   stbi_uc *snap[2];
+   stbi_uc *result;
+   int i;
+   int stride;
+   int out_channels;
+   if (req_comp < 0 || req_comp > 4)
+      return stbi__errpuc("bad req_comp", "Internal error");
+   if (idx < 0)
+      return stbi__errpuc("bad frame index", "GIF frame index out of range");
+   memset(&g, 0, sizeof(g));
+   snap[0] = NULL;
+   snap[1] = NULL;
+   stride = 0;
+   if (!stbi__gif_test(s))
+      return NULL;
+   for (i = 0; i <= idx; ++i) {
+      stbi_uc *two_back;
+      if (i >= 2)
+         two_back = snap[(i - 2) & 1];
+      else
+         two_back = NULL;
+      u = stbi__gif_load_next(s, &g, comp, 0, two_back);
+      if (u == (stbi_uc *)s) {
+         STBI_FREE(snap[0]);
+         STBI_FREE(snap[1]);
+         stbi__gif_free_state(&g);
+         return stbi__errpuc("bad frame index", "GIF frame index out of range");
+      }
+      if (u == NULL) {
+         STBI_FREE(snap[0]);
+         STBI_FREE(snap[1]);
+         stbi__gif_free_state(&g);
+         return NULL;
+      }
+      if (i == 0) {
+         if (!stbi__mad3sizes_valid(4, g.w, g.h, 0)) {
+            STBI_FREE(snap[0]);
+            STBI_FREE(snap[1]);
+            stbi__gif_free_state(&g);
+            return stbi__errpuc("too large", "GIF image is too large");
+         }
+         stride = g.w * g.h * 4;
+      }
+      if (i <= idx - 2) {
+         int slot;
+         slot = i & 1;
+         if (snap[slot] == NULL) {
+            snap[slot] = (stbi_uc *)stbi__malloc(stride);
+            if (snap[slot] == NULL) {
+               STBI_FREE(snap[0]);
+               STBI_FREE(snap[1]);
+               stbi__gif_free_state(&g);
+               return stbi__errpuc("outofmem", "Out of memory");
+            }
+         }
+         memcpy(snap[slot], g.out, stride);
+      }
+   }
+   result = (stbi_uc *)stbi__malloc(stride);
+   if (result == NULL) {
+      STBI_FREE(snap[0]);
+      STBI_FREE(snap[1]);
+      stbi__gif_free_state(&g);
+      return stbi__errpuc("outofmem", "Out of memory");
+   }
+   memcpy(result, g.out, stride);
+   if (delay)
+      *delay = g.delay;
+   if (x) *x = g.w;
+   if (y) *y = g.h;
+   if (comp)
+      *comp = 4;
+   STBI_FREE(snap[0]);
+   STBI_FREE(snap[1]);
+   stbi__gif_free_state(&g);
+   out_channels = 4;
+   if (req_comp && req_comp != 4) {
+      result = stbi__convert_format(result, 4, req_comp, *x, *y);
+      if (result == NULL)
+         return NULL;
+      out_channels = req_comp;
+   }
+   if (stbi__vertically_flip_on_load)
+      stbi__vertical_flip(result, *x, *y, out_channels);
+   return result;
+}
+
+STBIDEF int stbi_gif_count_from_memory(stbi_uc const *buffer, int len, int *x, int *y, int *frames)
+{
+   stbi__context s;
+   stbi__start_mem(&s, buffer, len);
+   return stbi__gif_count_main(&s, x, y, frames);
+}
+
+STBIDEF int stbi_gif_count_from_callbacks(stbi_io_callbacks const *clbk, void *user, int *x, int *y, int *frames)
+{
+   stbi__context s;
+   stbi__start_callbacks(&s, (stbi_io_callbacks *)clbk, user);
+   return stbi__gif_count_main(&s, x, y, frames);
+}
+
+STBIDEF int stbi_gif_get_frame_info_from_memory(stbi_uc const *buffer, int len, int frame_index, stbi_gif_frame_info *info)
+{
+   stbi__context s;
+   stbi__start_mem(&s, buffer, len);
+   return stbi__gif_info_main(&s, frame_index, info);
+}
+
+STBIDEF int stbi_gif_get_frame_info_from_callbacks(stbi_io_callbacks const *clbk, void *user, int frame_index, stbi_gif_frame_info *info)
+{
+   stbi__context s;
+   stbi__start_callbacks(&s, (stbi_io_callbacks *)clbk, user);
+   return stbi__gif_info_main(&s, frame_index, info);
+}
+
+STBIDEF stbi_uc *stbi_load_gif_frame_from_memory(stbi_uc const *buffer, int len, int frame_index, int *delay, int *x, int *y, int *comp, int req_comp)
+{
+   stbi__context s;
+   stbi__start_mem(&s, buffer, len);
+   return stbi__gif_load_frame_main(&s, frame_index, delay, x, y, comp, req_comp);
+}
+
+STBIDEF stbi_uc *stbi_load_gif_frame_from_callbacks(stbi_io_callbacks const *clbk, void *user, int frame_index, int *delay, int *x, int *y, int *comp, int req_comp)
+{
+   stbi__context s;
+   stbi__start_callbacks(&s, (stbi_io_callbacks *)clbk, user);
+   return stbi__gif_load_frame_main(&s, frame_index, delay, x, y, comp, req_comp);
+}
+
+#ifndef STBI_NO_STDIO
+STBIDEF int stbi_gif_count(char const *filename, int *x, int *y, int *frames)
+{
+   FILE *f;
+   int r;
+   f = stbi__fopen(filename, "rb");
+   if (!f)
+      return 0;
+   r = stbi_gif_count_from_file(f, x, y, frames);
+   fclose(f);
+   return r;
+}
+
+STBIDEF int stbi_gif_count_from_file(FILE *f, int *x, int *y, int *frames)
+{
+   stbi__context s;
+   long pos;
+   int r;
+   pos = ftell(f);
+   stbi__start_file(&s, f);
+   r = stbi__gif_count_main(&s, x, y, frames);
+   fseek(f, pos, SEEK_SET);
+   return r;
+}
+
+STBIDEF int stbi_gif_get_frame_info(char const *filename, int frame_index, stbi_gif_frame_info *info)
+{
+   FILE *f;
+   int r;
+   f = stbi__fopen(filename, "rb");
+   if (!f)
+      return 0;
+   r = stbi_gif_get_frame_info_from_file(f, frame_index, info);
+   fclose(f);
+   return r;
+}
+
+STBIDEF int stbi_gif_get_frame_info_from_file(FILE *f, int frame_index, stbi_gif_frame_info *info)
+{
+   stbi__context s;
+   long pos;
+   int r;
+   pos = ftell(f);
+   stbi__start_file(&s, f);
+   r = stbi__gif_info_main(&s, frame_index, info);
+   fseek(f, pos, SEEK_SET);
+   return r;
+}
+
+STBIDEF stbi_uc *stbi_load_gif_frame(char const *filename, int frame_index, int *delay, int *x, int *y, int *comp, int req_comp)
+{
+   FILE *f;
+   stbi_uc *r;
+   f = stbi__fopen(filename, "rb");
+   if (!f)
+      return stbi__errpuc("can't fopen", "Unable to open file");
+   r = stbi_load_gif_frame_from_file(f, frame_index, delay, x, y, comp, req_comp);
+   fclose(f);
+   return r;
+}
+
+STBIDEF stbi_uc *stbi_load_gif_frame_from_file(FILE *f, int frame_index, int *delay, int *x, int *y, int *comp, int req_comp)
+{
+   stbi__context s;
+   stbi__start_file(&s, f);
+   return stbi__gif_load_frame_main(&s, frame_index, delay, x, y, comp, req_comp);
+}
+#endif
 #endif
 
 // *************************************************************************************************

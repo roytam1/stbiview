@@ -1081,6 +1081,22 @@ void LoadImageFromPath(HWND hwnd, char* filePath) {
         pSrc = stb_gemras_load(filePath, &imgW, &imgH, &comp, comp);
     }
     else
+    if(fileExt &&
+        (stricmp(fileExt,".png") == 0 ||
+         stricmp(fileExt,".apng") == 0)) {
+        /* APNG frame viewing via stb_image APNG APIs (P/N to step frames).
+           Still PNGs fall through to the generic TrySTB path unchanged.
+           The frame buffer is stb-owned, so it frees via stbi_image_free. */
+        if (stbi_is_apng(filePath)) {
+            int frames = 0;
+            if (stbi_apng_count(filePath, NULL, NULL, &frames, NULL) && frames > 1)
+                pageCount = frames;
+            pSrc = stbi_load_apng_frame(filePath, page, &imgW, &imgH, &channels, 3);
+        } else {
+            goto TrySTB;
+        }
+    }
+    else
     {
 TrySTB:
         // 1. Load raw packed RGB data from stb_image
@@ -1182,7 +1198,7 @@ void OpenPicFile(HWND hwnd) {
     ofn.hwndOwner = hwnd;
     ofn.lpstrFile = szFile;
     ofn.nMaxFile = sizeof(szFile);
-    ofn.lpstrFilter = "Images\0*.jpg;*.png;*.gif;*.bmp;*.tga;*.pnm;*.ppm;*.pgm;*.pbm;*.pam;*.webp;*.web;*.wbp;*.pcx;*.xbm;*.xpm;*.msp;*.qoi;*.jxl;*.tif;*.tiff;*.mag;*.p2;*.avif;*.ivf;*.jb2;*.jbig2;*.jbg;*.jbig\0All Files\0*.*\0";
+    ofn.lpstrFilter = "Images\0*.jpg;*.png;*.apng;*.gif;*.bmp;*.tga;*.pnm;*.ppm;*.pgm;*.pbm;*.pam;*.webp;*.web;*.wbp;*.pcx;*.xbm;*.xpm;*.msp;*.qoi;*.jxl;*.tif;*.tiff;*.mag;*.p2;*.avif;*.ivf;*.jb2;*.jbig2;*.jbg;*.jbig\0All Files\0*.*\0";
     ofn.Flags = OFN_PATHMUSTEXIST | OFN_FILEMUSTEXIST;
 
     if (GetOpenFileName(&ofn)) {

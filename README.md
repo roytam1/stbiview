@@ -8,8 +8,8 @@ A high-performance, lightweight image viewer specifically engineered for **Windo
 * **Color Cube LUT:** Uses a pre-computed 32x32x32 Look-Up Table to map colors instantly to VGA (16) or Win8-based (256) palettes, avoiding expensive distance calculations.
 * **Custom Generic 256 Color Palette:** Based on ["win8" palette](https://web.archive.org/web/20250227072942/https://eisbox.net/downloads/palettes/win-8.txt) with some modifications on both palette and `FindClosestColor` function.
 * **Universal Format Support:**
-    * **Modern:** QOI (Quite OK Image), WebP, AVIF (not all features are supported), JPEG XL, JPG, PNG, GIF (without animation), JBIG2 (first page only), BMP, Y4M (including monochrome `Cmono`/`C400`).
-    * **Retro/Unix:** PCX, TGA, TIFF (Classic TIFF, BigTIFF and some encodings are not supported), MAG, PIC2 (.p2), MSP, GEM Raster (.img/.ximg/.timg), PBM (P4 binary), PNM, PGM, PPM, PAM (P7, 8-bit up to RGBA), JBIG, XBM (X-BitMap) and XPM (X-PixMap).
+    * **Modern:** QOI (Quite OK Image), WebP, AVIF (not all features are supported), JPEG XL, JPG, PNG (including APNG frame viewing), GIF (without animation), JBIG2 (multi-page), BMP, Y4M (including monochrome `Cmono`/`C400`).
+    * **Retro/Unix:** PCX, TGA, TIFF (multi-page; Classic TIFF, BigTIFF and some encodings are not supported), MAG, PIC2 (.p2), MSP, GEM Raster (.img/.ximg/.timg), PBM (P4 binary), PNM, PGM, PPM, PAM (P7, 8-bit up to RGBA), JBIG, XBM (X-BitMap) and XPM (X-PixMap).
 * **Explicit Fit-to-Window:** Press `-` for a one-shot aspect-preserving shrink-to-fit (shrink only, never upscale); `0` returns to 100%. Nothing re-renders on window resize afterwards, keeping 486-class machines responsive.
 * **Pristine + View Pipeline:** The decoded image is kept untouched in memory while display and saving work on a derived view, so re-fitting or changing dither mode never needs a reload from disk.
 * **Smooth Drag-to-Scroll:** An "Acrobat-style" Hand Tool for panning large images, utilizing `SetCapture` and `ScrollWindowEx` for tear-free movement.
@@ -58,7 +58,7 @@ On a 486SX, every clock cycle counts. The image processing pipeline follows thes
 | **'D'** | Change Dither Mode, re-applied live to the current view (0=No Dithering, 1=Dithering depends on display bitdepth, 2=Force Mono Dithering, 3=Force 16-colors Dithering, 4=Force 256-colors Dithering) |
 | **'-'** (or numpad `-`) | One-shot shrink-to-fit: resize display image to the client area, aspect-preserving, shrink only |
 | **'0'** (or numpad `0`) | Return to 100% size |
-| **'P'** / **'N'** | Previous / next page in multi-page TIFF and JBIG2 files (no-op on single-page images); fit and dither mode are preserved across pages |
+| **'P'** / **'N'** | Previous / next page in multi-page TIFF, JBIG2, and APNG files (no-op on single-page images); fit and dither mode are preserved across pages |
 | **Esc** | Quit |
 
 ## 🏗 Building

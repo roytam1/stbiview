@@ -8027,7 +8027,7 @@ static void *stbi__load_gif_main(stbi__context *s, int **delays, int *x, int *y,
             }
             memcpy( out + ((layers - 1) * stride), u, stride );
             if (layers >= 2) {
-               two_back = out - 2 * stride;
+               two_back = out + (layers - 2) * stride;
             }
 
             if (delays) {
@@ -8099,76 +8099,111 @@ static void stbi__gif_free_state(stbi__gif *g)
    g->background = NULL;
 }
 
-static int stbi__gif_count_main(stbi__context *s, int *x, int *y, int *frames)
+static int stbi__gif_skip_blocks(stbi__context *s)
+{
+   int n;
+   for (;;) {
+      n = stbi__get8(s);
+      if (n == 0)
+         return 1;
+      stbi__skip(s, n);
+   }
+}
+
+/* Lightweight scan: count frames and read per-frame metadata without
+   LZW-decoding any raster data or allocating image buffers. */
+static int stbi__gif_scan_main(stbi__context *s, int want_idx, stbi_gif_frame_info *want_info, int *o_x, int *o_y, int *o_frames)
 {
    stbi__gif g;
-   stbi_uc *u;
+   int pending_delay;
+   int pending_dispose;
    int layers;
    memset(&g, 0, sizeof(g));
    if (!stbi__gif_test(s))
       return 0;
+   if (!stbi__gif_header(s, &g, NULL, 0))
+      return 0;
+   if (o_x) *o_x = g.w;
+   if (o_y) *o_y = g.h;
+   pending_delay = 0;
+   pending_dispose = 0;
    layers = 0;
    for (;;) {
-      u = stbi__gif_load_next(s, &g, NULL, 0, NULL);
-      if (u == (stbi_uc *)s) {
-         /* clean terminator */
+      int tag;
+      tag = stbi__get8(s);
+      if (tag == 0x2C) {
+         int x, y, w, h, flags, mcs;
+         x = stbi__get16le(s);
+         y = stbi__get16le(s);
+         w = stbi__get16le(s);
+         h = stbi__get16le(s);
+         if (((x + w) > g.w) || ((y + h) > g.h))
+            return stbi__err("bad Image Descriptor", "Corrupt GIF");
+         flags = stbi__get8(s);
+         if (flags & 0x80)
+            stbi__skip(s, 3 * (2 << (flags & 7)));
+         mcs = stbi__get8(s);
+         if (mcs > 12)
+            return stbi__err("bad LZW min code size", "Corrupt GIF");
+         if (!stbi__gif_skip_blocks(s))
+            return 0;
+         if (want_idx >= 0 && layers == want_idx && want_info) {
+            want_info->delay = pending_delay;
+            want_info->dispose_op = pending_dispose;
+            want_info->x_offset = x;
+            want_info->y_offset = y;
+            want_info->width = w;
+            want_info->height = h;
+            return 1;
+         }
+         ++layers;
+         pending_delay = 0;
+         pending_dispose = 0;
+      } else if (tag == 0x21) {
+         int label;
+         label = stbi__get8(s);
+         if (label == 0xF9) {
+            int n;
+            n = stbi__get8(s);
+            if (n == 4) {
+               int packed;
+               packed = stbi__get8(s);
+               pending_delay = 10 * stbi__get16le(s);
+               stbi__get8(s);
+               pending_dispose = (packed & 0x1C) >> 2;
+            } else {
+               stbi__skip(s, n);
+            }
+            if (!stbi__gif_skip_blocks(s))
+               return 0;
+         } else {
+            if (!stbi__gif_skip_blocks(s))
+               return 0;
+         }
+      } else if (tag == 0x3B) {
          break;
+      } else {
+         return stbi__err("unknown code", "Corrupt GIF");
       }
-      if (u == NULL) {
-         stbi__gif_free_state(&g);
-         return 0;
-      }
-      ++layers;
    }
-   if (layers == 0) {
-      stbi__gif_free_state(&g);
+   if (want_idx >= 0)
+      return stbi__err("bad frame index", "GIF frame index out of range");
+   if (layers == 0)
       return stbi__err("no frames", "Corrupt GIF");
-   }
-   if (x) *x = g.w;
-   if (y) *y = g.h;
-   if (frames) *frames = layers;
-   stbi__gif_free_state(&g);
+   if (o_frames) *o_frames = layers;
    return 1;
+}
+
+static int stbi__gif_count_main(stbi__context *s, int *x, int *y, int *frames)
+{
+   return stbi__gif_scan_main(s, -1, NULL, x, y, frames);
 }
 
 static int stbi__gif_info_main(stbi__context *s, int idx, stbi_gif_frame_info *out)
 {
-   stbi__gif g;
-   stbi_uc *u;
-   int i;
    if (idx < 0)
       return stbi__err("bad frame index", "GIF frame index out of range");
-   memset(&g, 0, sizeof(g));
-   if (!stbi__gif_test(s))
-      return 0;
-   for (i = 0; i <= idx; ++i) {
-      u = stbi__gif_load_next(s, &g, NULL, 0, NULL);
-      if (u == (stbi_uc *)s) {
-         stbi__gif_free_state(&g);
-         return stbi__err("bad frame index", "GIF frame index out of range");
-      }
-      if (u == NULL) {
-         stbi__gif_free_state(&g);
-         return 0;
-      }
-   }
-   if (out) {
-      out->delay = g.delay;
-      out->dispose_op = (g.eflags & 0x1C) >> 2;
-      if (g.line_size > 0) {
-         out->x_offset = g.start_x / 4;
-         out->y_offset = g.start_y / g.line_size;
-         out->width = (g.max_x - g.start_x) / 4;
-         out->height = (g.max_y - g.start_y) / g.line_size;
-      } else {
-         out->x_offset = 0;
-         out->y_offset = 0;
-         out->width = g.w;
-         out->height = g.h;
-      }
-   }
-   stbi__gif_free_state(&g);
-   return 1;
+   return stbi__gif_scan_main(s, idx, out, NULL, NULL, NULL);
 }
 
 static stbi_uc *stbi__gif_load_frame_main(stbi__context *s, int idx, int *delay, int *x, int *y, int *comp, int req_comp)

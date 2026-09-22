@@ -51,6 +51,11 @@
 #define STB_GEMRAS_IMPLEMENTATION
 #include "stb_gemras.h"
 
+/* stb_icocur for Windows ICO/CUR image format (PNG entries via stb_image) */
+#define STB_ICOCUR_IMPLEMENTATION
+#define STB_ICOCUR_USE_STB_IMAGE
+#include "stb_icocur.h"
+
 /* Internal Decoder: XBM format */
 
 unsigned char* LoadXBM(const char* szPath, int* w, int* h) {

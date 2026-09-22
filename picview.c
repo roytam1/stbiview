@@ -913,7 +913,7 @@ void LoadImageFromPath(HWND hwnd, char* filePath) {
     simplewebp *swebp;
     j40_image jxlimage;
     MiniTIFF_Image *tiffimg;
-    int isWebp = 0, isJXL = 0, isPCX = 0, isTIFF = 0, isAVIF = 0, isJBIG2 = 0, isJBIG = 0, isGEMRAS = 0, swRet;
+    int isWebp = 0, isJXL = 0, isPCX = 0, isTIFF = 0, isAVIF = 0, isJBIG2 = 0, isJBIG = 0, isGEMRAS = 0, isICOCUR = 0, swRet;
     char errBuf[MAX_PATH + 50];
 
     UpdateWindowTitle(hwnd, "Loading...");
@@ -1110,6 +1110,20 @@ void LoadImageFromPath(HWND hwnd, char* filePath) {
         }
     }
     else
+    if(fileExt &&
+        (stricmp(fileExt,".ico") == 0 ||
+         stricmp(fileExt,".cur") == 0)) {
+        /* ICO/CUR directory entries via stb_icocur (P/N steps entries).
+           Pages map directly to directory order; entry 0 opens by default.
+           Buffers free via stb_icocur_free. */
+        int entries = 0;
+        isICOCUR = 1;
+        entries = stb_icocur_count(filePath);
+        if (entries > 1)
+            pageCount = entries;
+        pSrc = stb_icocur_load_index(filePath, page, &imgW, &imgH, &channels, 3);
+    }
+    else
     {
 TrySTB:
         // 1. Load raw packed RGB data from stb_image
@@ -1132,6 +1146,7 @@ TrySTB:
         else if(isJBIG) stbi_jbig_free(pSrc);
         else if(isJXL) j40_free(&jxlimage);
         else if(isAVIF) stb_avif_free(pSrc);
+        else if(isICOCUR) stb_icocur_free(pSrc);
         else stbi_image_free(pSrc); // Free the original stb_image buffer
         MessageBox(hwnd, "Image too large", "Error", MB_ICONERROR);
         *filePath = 0; // clean filename buffer
@@ -1146,6 +1161,7 @@ TrySTB:
         else if(isJBIG) stbi_jbig_free(pSrc);
         else if(isJXL) j40_free(&jxlimage);
         else if(isAVIF) stb_avif_free(pSrc);
+        else if(isICOCUR) stb_icocur_free(pSrc);
         else if(isGEMRAS) stb_gemras_free(pSrc);
         else stbi_image_free(pSrc); // Free the original stb_image buffer
         MessageBox(hwnd, "Out of memory", "Error", MB_ICONERROR);
@@ -1159,6 +1175,7 @@ TrySTB:
     else if(isJBIG) stbi_jbig_free(pSrc);
     else if(isJXL) j40_free(&jxlimage);
     else if(isAVIF) stb_avif_free(pSrc);
+    else if(isICOCUR) stb_icocur_free(pSrc);
     else if(isGEMRAS) stb_gemras_free(pSrc);
     else stbi_image_free(pSrc); // Free the original stb_image buffer
     if (pOrigData) free(pOrigData);
@@ -1211,7 +1228,7 @@ void OpenPicFile(HWND hwnd) {
     ofn.hwndOwner = hwnd;
     ofn.lpstrFile = szFile;
     ofn.nMaxFile = sizeof(szFile);
-    ofn.lpstrFilter = "Images\0*.jpg;*.png;*.apng;*.gif;*.bmp;*.tga;*.pnm;*.ppm;*.pgm;*.pbm;*.pam;*.webp;*.web;*.wbp;*.pcx;*.xbm;*.xpm;*.msp;*.qoi;*.jxl;*.tif;*.tiff;*.mag;*.p2;*.avif;*.ivf;*.jb2;*.jbig2;*.jbg;*.jbig\0All Files\0*.*\0";
+    ofn.lpstrFilter = "Images\0*.jpg;*.png;*.apng;*.gif;*.bmp;*.ico;*.cur;*.tga;*.pnm;*.ppm;*.pgm;*.pbm;*.pam;*.webp;*.web;*.wbp;*.pcx;*.xbm;*.xpm;*.msp;*.qoi;*.jxl;*.tif;*.tiff;*.mag;*.p2;*.avif;*.ivf;*.jb2;*.jbig2;*.jbg;*.jbig\0All Files\0*.*\0";
     ofn.Flags = OFN_PATHMUSTEXIST | OFN_FILEMUSTEXIST;
 
     if (GetOpenFileName(&ofn)) {

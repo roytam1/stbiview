@@ -1147,6 +1147,7 @@ TrySTB:
         else if(isJXL) j40_free(&jxlimage);
         else if(isAVIF) stb_avif_free(pSrc);
         else if(isICOCUR) stb_icocur_free(pSrc);
+        else if(isGEMRAS) stb_gemras_free(pSrc);
         else stbi_image_free(pSrc); // Free the original stb_image buffer
         MessageBox(hwnd, "Image too large", "Error", MB_ICONERROR);
         *filePath = 0; // clean filename buffer

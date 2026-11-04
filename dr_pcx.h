@@ -44,7 +44,7 @@
 
 #include <stddef.h>
 
-#if defined(_MSC_VER) && _MSC_VER < 1600
+#if (defined(_MSC_VER) && _MSC_VER < 1600) || defined(OLDSDK)
 typedef   signed char    drpcx_int8;
 typedef unsigned char    drpcx_uint8;
 typedef   signed short   drpcx_int16;

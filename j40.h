@@ -91,7 +91,7 @@ int main(int argc, char **argv) {
 #include <stdlib.h>
 
 /* MSVC 6.0 compatibility fixes */
-#if defined(_MSC_VER) && (_MSC_VER <= 1800)
+#if (defined(_MSC_VER) && (_MSC_VER <= 1800)) || defined(OLDSDK)
     typedef unsigned char      uint8_t;
     typedef unsigned short     uint16_t;
     typedef unsigned int       uint32_t;
@@ -137,7 +137,7 @@ int main(int argc, char **argv) {
 #endif
 
 /* move math related defines lower */
-#if defined(__TINYC__) || (defined(_MSC_VER) && (_MSC_VER <= 1800))
+#if defined(__TINYC__) || (defined(_MSC_VER) && (_MSC_VER <= 1800)) || defined(OLDSDK)
     #include <float.h>
     #define isfinite _finite
     //#define cbrtf(x) (float)pow(x,(double)1/3)
@@ -676,7 +676,7 @@ J40_ALWAYS_INLINE int j40__surely_nonzero(float x) {
 }
 
 #if defined(_MSC_VER) || defined(__TINYC__) // required for j40__floor/ceil_lgN implementations
-#if _MSC_VER > 1400
+#if (_MSC_VER > 1400) && !defined(OLDSDK)
 #include <intrin.h>
 #pragma intrinsic(_BitScanReverse)
 

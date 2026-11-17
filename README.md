@@ -22,7 +22,7 @@ A high-performance, lightweight image viewer specifically engineered for **Windo
 
 ### The "486SX" Pipeline
 On a 486SX, every clock cycle counts. The image processing pipeline follows these strict rules:
-1.  **Integer Only:** All scaling, dithering, and color conversion use bit-shifting (`>>`) instead of division. (Not applicable to external libraries like j40)
+1.  **Integer Only:** All scaling, dithering, and color conversion use bit-shifting (`>>`) instead of division. (Not applicable to external libraries like jxldec)
 2.  **Bottom-Up DIBs:** Images are stored in memory in the native Windows Bottom-Up format to ensure compatibility with the strictest Win32s display drivers.
 3.  **Palette Realization:** Full support for `WM_QUERYNEWPALETTE` and `WM_PALETTECHANGED` to ensure color accuracy on 256-color (8-bit) SVGA displays.
 4.  **Resize First, Dither Last:** Resampling always happens in full color; Floyd-Steinberg dithering runs once at final display size, since dither patterns are resolution-dependent. Resizing uses an integer-only (Bresenham + 8-bit weights) bilinear filter — no FPU required.
@@ -42,7 +42,7 @@ On a 486SX, every clock cycle counts. The image processing pipeline follows thes
 | **JBIG2** | ✅ Moderate | JBIG2 could be a bit slower than JBIG because of Glyph Restorations. | stb_jbig2 |
 | **PNG** | 🐢 Slow | Complex zlib decompression and PNG filters. | stb_image |
 | **JPG** , **WebP** | 🐢 Slow | Heavy IDCT math (emulated on SX). | stb_image, simplewebp |
-| **JPEG XL** | 🐢 Slow | Lots of floating point operations. Lossless JPEG XL can be decoded faster than lossy JPEG XL. | j40 |
+| **JPEG XL** | 🐢 Slow | Lots of floating point operations. Lossless JPEG XL can be decoded faster than lossy JPEG XL. | jxldec |
 | **AVIF** | 🐢 Slow | AV1 uses very complicated algorithm to restore image | stb_avif |
 
 ## ⌨️ Controls
@@ -76,7 +76,7 @@ On a 486SX, every clock cycle counts. The image processing pipeline follows thes
 * `stb_image.h` (for JPG/PNG support, [a vendored version is used](https://github.com/roytam1/stb_image).)
 * `dr_pcx.h` ([C89 version is used](https://github.com/roytam1/dr_pcx))
 * `simplewebp.h` ([https://github.com/MikuAuahDark/simplewebp](https://github.com/MikuAuahDark/simplewebp))
-* `j40.h` ([C89 version is used](https://github.com/roytam1/j40))
+* `jxldec.h` ([C89 version is used](https://github.com/roytam1/jxldec/tree/c89))
 * `minitiff.h` ([https://github.com/roytam1/minitiff](https://github.com/roytam1/minitiff))
 * `stb_pic2.h` ([https://github.com/roytam1/stb_pic2](https://github.com/roytam1/stb_pic2))
 * `stb_avif.h` ([https://github.com/roytam1/stb_avif/tree/chatgpt](https://github.com/roytam1/stb_avif/tree/chatgpt))

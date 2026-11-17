@@ -948,24 +948,17 @@ void LoadImageFromPath(HWND hwnd, char* filePath) {
             imgW = s_W;
             imgH = s_H;
 
-            // Allocate memory for simplewebp output buffer (in RGBA form)
-            pSrc = malloc(imgW * imgH * 4);
+            // Allocate memory for simplewebp output buffer (in RGB form)
+            pSrc = malloc(imgW * imgH * 3);
             if (!pSrc) {
                 if(swebp) simplewebp_unload(swebp);
                 MessageBox(hwnd, "Out of memory (webp)", "Error", MB_ICONERROR);
                 return;
             }
 
-            // decode webp with simplewebp
-            swRet = simplewebp_decode(swebp, pSrc, NULL);
-            if (swRet == SIMPLEWEBP_NO_ERROR) {
-                /* transform rgba to rgb in-place */
-                for(x=0; x < imgW*imgH; x++) {
-                    pSrc[x * 3 + 0] = pSrc[x * 4 + 0];
-                    pSrc[x * 3 + 1] = pSrc[x * 4 + 1];
-                    pSrc[x * 3 + 2] = pSrc[x * 4 + 2];
-                }
-            } else {
+            // decode webp with simplewebp directly into packed RGB24
+            swRet = simplewebp_decode24(swebp, pSrc, NULL);
+            if (swRet != SIMPLEWEBP_NO_ERROR) {
                 free(pSrc);
                 pSrc = NULL;
             }

@@ -15,11 +15,9 @@
 #define STB_PIC2_IMPLEMENTATION
 #include "stb_pic2.h"
 
-/* j40 for JPEG XL (.jxl) image format */
-#define J40_CONFIRM_THAT_THIS_IS_EXPERIMENTAL_AND_POTENTIALLY_UNSAFE
-#define J40_IMPLEMENTATION
-#include "j40.h"
-#include "j40.h"
+/* jxldec for JPEG XL (.jxl) image format (stb-style single header) */
+#define JXLDEC_IMPLEMENTATION
+#include "jxldec.h"
 
 /* MiniTIFF for TIFF image format, with JBIG(1) support */
 #define MINITIFF_IMPLEMENTATION

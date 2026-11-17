@@ -11,6 +11,13 @@
 /* Decoders are moved to external file */
 #include "decoders.h"
 
+/* Release all resources held by a jxldec load. */
+static void FreeJXLData(jxl_ctx *ctx, jxl_image *img, unsigned char *buf) {
+    if (img) jxl_image_destroy(ctx, img);
+    if (ctx) jxl_ctx_free(ctx);
+    if (buf) free(buf);
+}
+
 /* MyVerInfo from GreenPad */
 /* MYVERINFO defination */
 #pragma pack(push,1)
@@ -911,7 +918,10 @@ void LoadImageFromPath(HWND hwnd, char* filePath) {
     unsigned char *pSrc = NULL, *pNewOrig;
     char *fileExt;
     simplewebp *swebp;
-    j40_image jxlimage;
+    jxl_ctx *jxlctx = NULL;
+    jxl_image *jxlimg = NULL;
+    unsigned char *jxlbuf = NULL;
+    FILE *jxlfile;
     MiniTIFF_Image *tiffimg;
     int isWebp = 0, isJXL = 0, isPCX = 0, isTIFF = 0, isAVIF = 0, isJBIG2 = 0, isJBIG = 0, isGEMRAS = 0, isICOCUR = 0, swRet;
     char errBuf[MAX_PATH + 50];
@@ -965,24 +975,40 @@ void LoadImageFromPath(HWND hwnd, char* filePath) {
     }
     else
     if(fileExt && stricmp(fileExt,".jxl") == 0) {
+        long jxlSize = 0;
         isJXL = 1;
-        j40_from_file(&jxlimage, filePath);
-        j40_output_format(&jxlimage, J40_RGBA, J40_U8X4);
-
-        if (j40_next_frame(&jxlimage)) {
-            j40_pixels_u8x4 pixels;
-            j40_frame frame = j40_current_frame(&jxlimage);
-            pixels = j40_frame_pixels_u8x4(&frame, J40_RGBA);
-            imgW = pixels.width;
-            imgH = pixels.height;
-            pSrc = pixels.data;
-
-            /* transform rgba to rgb in-place, also handles stride_bytes properly for our other operations */
-            for(x=0; x < imgW*imgH; x++) {
-                int y = x / imgW;
-                pSrc[x * 3 + 0] = pSrc[x * 4 + (y * (pixels.stride_bytes - imgW*4)) + 0];
-                pSrc[x * 3 + 1] = pSrc[x * 4 + (y * (pixels.stride_bytes - imgW*4)) + 1];
-                pSrc[x * 3 + 2] = pSrc[x * 4 + (y * (pixels.stride_bytes - imgW*4)) + 2];
+        jxlfile = fopen(filePath, "rb");
+        if (jxlfile) {
+            if (fseek(jxlfile, 0, SEEK_END) == 0) {
+                jxlSize = ftell(jxlfile);
+                fseek(jxlfile, 0, SEEK_SET);
+            }
+            if (jxlSize > 0) {
+                jxlbuf = (unsigned char*)malloc((size_t)jxlSize);
+                if (jxlbuf) {
+                    if (fread(jxlbuf, 1, (size_t)jxlSize, jxlfile) != (size_t)jxlSize) {
+                        free(jxlbuf);
+                        jxlbuf = NULL;
+                    }
+                }
+            }
+            fclose(jxlfile);
+        }
+        if (jxlbuf) {
+            jxlctx = jxl_ctx_new(NULL, NULL, NULL, NULL);
+            if (jxlctx) {
+                jxl_ctx_set_srgb_output(jxlctx, 1);
+                jxlimg = jxl_decode(jxlctx, jxlbuf, (size_t)jxlSize,
+                                    JXLDEC_FORMAT_RGB24);
+            }
+            if (jxlimg) {
+                imgW = jxlimg->width;
+                imgH = jxlimg->height;
+                pSrc = jxlimg->data; /* already packed top-down RGB24 */
+            } else {
+                FreeJXLData(jxlctx, jxlimg, jxlbuf);
+                jxlctx = NULL;
+                jxlbuf = NULL;
             }
         }
     }
@@ -1131,6 +1157,7 @@ TrySTB:
     }
 
     if (!pSrc || !imgW || !imgH) {
+        if(isJXL) FreeJXLData(jxlctx, jxlimg, jxlbuf);
         wsprintf(errBuf, "Failed to load:\n%s", filePath);
         MessageBox(hwnd, errBuf, "Error", MB_ICONERROR);
         *filePath = 0; // clean filename buffer
@@ -1144,7 +1171,7 @@ TrySTB:
         else if(isTIFF) tiff_free(tiffimg);
         else if(isJBIG2) stb_jbig2_free(pSrc);
         else if(isJBIG) stbi_jbig_free(pSrc);
-        else if(isJXL) j40_free(&jxlimage);
+        else if(isJXL) FreeJXLData(jxlctx, jxlimg, jxlbuf);
         else if(isAVIF) stb_avif_free(pSrc);
         else if(isICOCUR) stb_icocur_free(pSrc);
         else if(isGEMRAS) stb_gemras_free(pSrc);
@@ -1160,7 +1187,7 @@ TrySTB:
         else if(isTIFF) tiff_free(tiffimg);
         else if(isJBIG2) stb_jbig2_free(pSrc);
         else if(isJBIG) stbi_jbig_free(pSrc);
-        else if(isJXL) j40_free(&jxlimage);
+        else if(isJXL) FreeJXLData(jxlctx, jxlimg, jxlbuf);
         else if(isAVIF) stb_avif_free(pSrc);
         else if(isICOCUR) stb_icocur_free(pSrc);
         else if(isGEMRAS) stb_gemras_free(pSrc);
@@ -1174,7 +1201,7 @@ TrySTB:
     else if(isTIFF) tiff_free(tiffimg);
     else if(isJBIG2) stb_jbig2_free(pSrc);
     else if(isJBIG) stbi_jbig_free(pSrc);
-    else if(isJXL) j40_free(&jxlimage);
+    else if(isJXL) FreeJXLData(jxlctx, jxlimg, jxlbuf);
     else if(isAVIF) stb_avif_free(pSrc);
     else if(isICOCUR) stb_icocur_free(pSrc);
     else if(isGEMRAS) stb_gemras_free(pSrc);

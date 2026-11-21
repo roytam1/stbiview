@@ -1076,6 +1076,11 @@ void LoadImageFromPath(HWND hwnd, char* filePath) {
         pSrc = LoadQOI(filePath, &imgW, &imgH);
     }
     else
+    if(fileExt && stricmp(fileExt,".abm") == 0) {
+        isWebp = 1; // not really webp, but same malloc style as webp
+        pSrc = LoadABM(filePath, &imgW, &imgH);
+    }
+    else
     if(fileExt && stricmp(fileExt,".xbm") == 0) {
         isWebp = 1; // not really webp, but same malloc style as webp
         pSrc = LoadXBM(filePath, &imgW, &imgH);

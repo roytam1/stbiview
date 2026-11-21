@@ -765,3 +765,135 @@ unsigned char* LoadY4M(const char* szPath, int* w, int* h) {
     *h = height;
     return pRGB;
 }
+
+/* Internal Decoder: ABM format
+ *
+ * WRP's (Web Rendering Proxy) black-and-white picture format for 1-bit
+ * displays, as used by Archaic. The format is:
+ *
+ *   "ABM1"                  4 bytes
+ *   width, height           2 bytes each, high byte first
+ *   depth                   1 byte, must be 1
+ *   flags                   1 byte, must be 0
+ *   rows                    token-packed, one bit per pixel, high bit left,
+ *                           1 = black. Each row is a whole number of bytes.
+ *
+ * Tokens: a control byte c, then n = (c & 63) + 1 bytes:
+ *   c < 0x40   n literal bytes follow
+ *   c < 0x80   n white bytes (zero)
+ *   c < 0xC0   n bytes copied from the row above (distance = bytes/row)
+ *   c < 0xE0   n = (c & 31) + 2; one extra byte gives distance - 1
+ *   otherwise  n = (c & 31) + 3; two extra bytes (high first) give distance - 1
+ *
+ * This is a fresh implementation of the documented format, not a copy of
+ * archaic/pic.c. Output is packed top-down 24-bit RGB; 1 bits become black.
+ */
+
+unsigned char* LoadABM(const char* szPath, int* w, int* h) {
+    FILE* f;
+    unsigned char* filebuf;
+    long filelen;
+    unsigned char *bits, *result, *o, *end, *base, *ip, *ipend;
+    int width, height, bpl, c, n;
+    long d;
+    int x, y;
+
+    f = fopen(szPath, "rb");
+    if (!f) return NULL;
+    if (fseek(f, 0, SEEK_END) != 0) { fclose(f); return NULL; }
+    filelen = ftell(f);
+    if (filelen < 10) { fclose(f); return NULL; }
+    fseek(f, 0, SEEK_SET);
+    filebuf = (unsigned char*)malloc((size_t)filelen);
+    if (!filebuf) { fclose(f); return NULL; }
+    if (fread(filebuf, 1, (size_t)filelen, f) != (size_t)filelen) {
+        free(filebuf);
+        fclose(f);
+        return NULL;
+    }
+    fclose(f);
+
+    if (filebuf[0] != 'A' || filebuf[1] != 'B' || filebuf[2] != 'M' ||
+        filebuf[3] != '1' || filebuf[8] != 1 || filebuf[9] != 0) {
+        free(filebuf);
+        return NULL;
+    }
+    width = (filebuf[4] << 8) | filebuf[5];
+    height = (filebuf[6] << 8) | filebuf[7];
+    if (width <= 0 || height <= 0 || width > 8192 || height > 8192) {
+        free(filebuf);
+        return NULL;
+    }
+    bpl = (width + 7) / 8;
+
+    /* The decoder works on the packed 1-bit rows. Zero-fill first: a
+       back-reference on the first row then reads white, as in the original. */
+    bits = (unsigned char*)malloc((size_t)bpl * height);
+    if (!bits) { free(filebuf); return NULL; }
+    memset(bits, 0, (size_t)bpl * height);
+
+    ip = filebuf + 10;
+    ipend = filebuf + filelen;
+    base = bits;
+    end = bits + (size_t)bpl * height;
+    o = bits;
+
+    while (o < end && ip < ipend) {
+        c = *ip++;
+        n = (c & 63) + 1;
+        if (c < 0x40) {
+            /* literal bytes */
+            if (n > end - o || n > ipend - ip) goto fail;
+            memcpy(o, ip, (size_t)n);
+            ip += n;
+            o += n;
+        } else if (c < 0x80) {
+            /* white bytes */
+            if (n > end - o) goto fail;
+            memset(o, 0, (size_t)n);
+            o += n;
+        } else {
+            /* back-reference */
+            if (c < 0xC0)
+                d = bpl;
+            else if (c < 0xE0) {
+                if (ip >= ipend) goto fail;
+                n = (c & 31) + 2;
+                d = (long)*ip++ + 1;
+            } else {
+                if (ipend - ip < 2) goto fail;
+                n = (c & 31) + 3;
+                d = (((long)ip[0] << 8) | ip[1]) + 1;
+                ip += 2;
+            }
+            if (n > end - o || d > o - base) goto fail;
+            for (x = 0; x < n; x++)
+                o[x] = o[x - d];   /* byte-wise so overlapping copies work */
+            o += n;
+        }
+    }
+    if (o != end) goto fail;   /* truncated body */
+
+    /* Expand the 1-bit rows to packed 24-bit RGB. */
+    result = (unsigned char*)malloc((size_t)width * height * 3);
+    if (!result) goto fail;
+    for (y = 0; y < height; y++) {
+        for (x = 0; x < width; x++) {
+            int bit = (bits[y * bpl + (x >> 3)] >> (7 - (x & 7))) & 1;
+            unsigned char v = bit ? 0 : 255;   /* 1 = black, 0 = white */
+            int idx = (y * width + x) * 3;
+            result[idx] = result[idx + 1] = result[idx + 2] = v;
+        }
+    }
+
+    free(bits);
+    free(filebuf);
+    *w = width;
+    *h = height;
+    return result;
+
+fail:
+    free(bits);
+    free(filebuf);
+    return NULL;
+}

@@ -32,8 +32,10 @@
     #define INT64_MAX  ((int64_t)0x7FFFFFFFFFFFFFFFi64)
     #define UINT64_MAX ((uint64_t)0xFFFFFFFFFFFFFFFFi64)
     #define SIZE_MAX   ((size_t)UINT32_MAX)
+#ifndef _UINTPTR_T_DEFINED
     typedef unsigned int       uintptr_t;
     typedef int                intptr_t;
+#endif
 #endif
 
 /* inline is C99; VC4/VC6 have __inline at best, and plain static is always
@@ -624,7 +626,7 @@ static JXL_INLINE_HINT uint32_t jxl_br_read(jxl_br *br, int n) {
 }
 
 JXL_INLINE uint32_t jxl_floor_log2_u64(uint64_t v) {
-#if defined(_MSC_VER) && !defined(__clang__) && defined(_WIN64)
+#if defined(_MSC_VER) && !defined(__clang__) && _MSC_VER >= 1400 && (defined(_WIN64) && !defined(_M_ALPHA))
     unsigned long idx;
     _BitScanReverse64(&idx, v);
     return (uint32_t)idx;
